@@ -1,12 +1,47 @@
-# autoresearch for unified quantum-plus-gravity formula search
+# autoresearch program for unified quantum-plus-gravity formula search
 
-This repository is no longer a language-model training project.
+This repo is designed to mimic the structure of `karpathy/autoresearch`, but for symbolic physics search instead of language-model pretraining.
 
-The goal is to use the `autoresearch` loop to search for a single explicit formula that can predict both gravity-side and quantum-side outputs from a fixed toy oracle.
+The target is a single compact formula that predicts both:
 
-## Read These Files First
+- gravity-side outputs from a fixed oracle
+- quantum-side outputs from the same fixed oracle
 
-Before starting any experiment loop, read:
+## Two Layers
+
+This project has two separate loops.
+
+### Inner loop: local evaluator
+
+The inner loop runs entirely on your machine with no API calls:
+
+- `simulation.py` is the fixed oracle
+- `train.py` evaluates one candidate search strategy against that oracle
+- tests validate the oracle contract and experiment contract
+
+### Outer loop: LLM researcher
+
+The outer loop is the part that makes this truly `autoresearch`-like:
+
+- an LLM reads the repo instructions
+- edits `train.py`
+- runs tests
+- runs `train.py`
+- compares the score to the previous best
+- keeps or discards the change
+- repeats on a fixed cadence
+
+If you want unattended autonomous iteration, this outer loop requires LLM access. That can come from:
+
+- an interactive Codex session like this one
+- another coding agent
+- an API-backed agent runner
+
+The repo itself does not need an API key. The autonomous researcher does.
+
+## Files To Read First
+
+Before any experiment loop starts, read:
 
 - `README.md`
 - `REQUIREMENTS.md`
@@ -14,13 +49,13 @@ Before starting any experiment loop, read:
 - `train.py`
 - `program.md`
 
-`prepare.py` is legacy from the original upstream repo and is out of scope for this project.
+`prepare.py` is legacy from the upstream repo and is out of scope here.
 
 ## Fixed vs Mutable Files
 
 ### Fixed files
 
-These are the harness and should not be edited during autonomous experimentation:
+Do not edit these during autonomous experimentation:
 
 - `simulation.py`
 - `REQUIREMENTS.md`
@@ -30,135 +65,129 @@ These are the harness and should not be edited during autonomous experimentation
 
 ### Mutable file
 
-During the experiment loop, the agent edits:
+The outer loop edits:
 
 - `train.py`
 
-This is the main search surface.
+That is the main experimental surface.
 
-## Core Objective
+## Core Metric
 
-The objective is to discover a compact shared formula that predicts both:
-
-- gravity-side oracle outputs
-- quantum-side oracle outputs
-
-The canonical score is:
+The canonical metric is:
 
 - `unified_score`
 
 Lower is better.
 
-For compatibility with the original `autoresearch` output format, `train.py` also prints:
+For compatibility with the original notebook and log shape, `train.py` also prints:
 
 - `val_bpb`
 
-In this repo, `val_bpb` is just an alias for `unified_score`. It does not mean bits per byte.
+In this repo, `val_bpb` is only a compatibility alias for `unified_score`.
 
-## What Counts As A Good Experiment
+## Test Gate
 
-A good experiment improves one or more of:
-
-- held-out gravity error
-- held-out quantum error
-- asymptotic-limit behavior
-- formula simplicity
-
-The final artifact should remain interpretable. Prefer experiments that improve the score without making the formula search much uglier.
-
-## Test-Driven Requirement
-
-This repo should stay testable.
-
-Before running an experiment, run:
+Before trusting any experiment result, the outer loop must run:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-If the tests fail, fix the issue before trusting any experiment result.
+If the tests fail, the iteration does not count.
 
-## Standard Run Command
+## Standard Evaluation Command
 
-Run the experiment like this:
+Run one local evaluation with:
 
 ```bash
 python3 train.py > run.log 2>&1
 ```
 
-Then extract the important lines:
+By default, `train.py` uses a 300-second time budget. For a shorter smoke test, override it like this:
+
+```bash
+TIME_BUDGET_SECONDS=5 python3 train.py > run.log 2>&1
+```
+
+Then inspect:
 
 ```bash
 grep "^unified_score:\|^val_bpb:\|^formula:" run.log
 ```
 
-If the grep output is empty, the run failed. Inspect:
+If that fails, inspect:
 
 ```bash
 tail -n 50 run.log
 ```
 
-## Diagnostics
+## Five-Minute Outer Loop
 
-Each successful run should generate a diagnostics plot file. Right now the baseline implementation writes:
+To stay close to upstream `autoresearch`, each run of `train.py` should use a fixed time budget. The current default is 300 seconds.
+
+Within that budget, `train.py` performs repeated formula-search rounds and reports the best result found before time expires.
+
+The outer LLM loop then uses that result to decide what to change next.
+
+## Diagnostics Contract
+
+Each successful run should write a diagnostic artifact. The current baseline writes:
 
 - `results/diagnostics.svg`
 
-The plot is part of the contract. If a run stops generating diagnostics, treat that as a regression unless there is a very good reason.
+Removing diagnostics without replacing them with something equally useful is a regression.
 
 ## Results Logging
 
-Keep using `results.tsv` as an untracked local experiment log.
-
-For compatibility with the original notebook shape, keep the existing 5-column schema:
+Use `results.tsv` as an untracked local log. Keep the original 5-column schema:
 
 ```text
 commit	val_bpb	memory_gb	status	description
 ```
 
-Interpretation in this repo:
+Interpretation here:
 
 1. `commit`: short git hash
 2. `val_bpb`: the unified score
 3. `memory_gb`: use `0.0` for now unless memory tracking is added later
 4. `status`: `keep`, `discard`, or `crash`
-5. `description`: short summary of the experiment
+5. `description`: short description of the experiment
 
-## The Experiment Loop
+## Experiment Loop
 
-Once setup is complete, loop like this:
+Once setup is complete, the outer LLM loop should do this forever:
 
-1. Check git state and current best commit.
-2. Edit `train.py` with one experimental change.
-3. Run the test suite.
-4. Commit the change.
-5. Run `python3 train.py > run.log 2>&1`.
-6. Read the score from `run.log`.
-7. If the run crashes, inspect the stack trace and decide whether to fix or discard.
-8. Log the outcome in `results.tsv`.
-9. If the unified score improves, keep the commit.
-10. If it does not improve, revert to the previous best state.
+1. Confirm the repo is clean and committed.
+2. Record the current baseline if it has not been logged yet.
+3. Modify only `train.py`.
+4. Run the test suite.
+5. Commit the experimental change.
+6. Run `python3 train.py > run.log 2>&1`.
+7. Extract the score and formula from the log.
+8. Log the result in `results.tsv`.
+9. If the score improves, keep the commit.
+10. If the score is equal or worse, revert to the previous best commit.
 
 ## What To Explore In `train.py`
 
-Useful experiment directions include:
+Useful directions include:
 
-- basis-term libraries
-- complexity penalties
-- normalization and scaling choices
-- sparsity or pruning heuristics
-- coefficient fitting methods
-- limit penalties
+- richer basis libraries
+- sparsity and pruning heuristics
+- tie-breaking by simplicity
+- better limit penalties
 - score weighting between gravity and quantum outputs
+- dataset curricula and harder held-out cases
+- formula distillation and reporting
 
 ## What Not To Do
 
-Do not turn the problem into two separate unrelated models and a late-stage average. The whole point is to search for one shared mathematical object.
+Do not split the task into two unrelated black-box models and average them afterward. That does not satisfy the actual goal.
 
-Do not edit the oracle during autonomous experiments. If the oracle changes, comparisons across runs become meaningless.
+Do not modify `simulation.py` during the autonomous loop. If the oracle changes, scores stop being comparable.
 
-Do not remove the diagnostics output without replacing it with something equally useful.
+Do not skip the tests.
 
 ## First Baseline Rule
 
-The first experimental run should always be the current baseline `train.py` as-is, with no changes. Record that score before starting further exploration.
+The first recorded run should always be the current `train.py` with no code changes. After that, the outer loop can begin experimenting.

@@ -1,168 +1,191 @@
-# Minimal Quantum Plus Gravity Model
+# Unified Quantum Plus Gravity Autoresearch
 
-This note captures the clearest version of the question:
+This repo is a small `autoresearch`-style environment for searching for a single compact formula that predicts both gravity-side and quantum-side behavior in a fixed toy model.
 
-> What is the smallest system where a computer model can reproduce measurable quantum behavior and measurable gravitational effects using today's physics, even though we still do not have one complete experimentally confirmed theory of quantum gravity?
+The current toy world is:
 
-## Important Clarification
+- two masses
+- each mass in a two-position spatial superposition
+- weak-field gravity
+- quantum phase accumulation from branch-dependent gravitational interaction
 
-If "perfect" is taken literally, then there is no example that matches the strongest version of the question. A perfect computer simulation is already a mathematical description. So the accurate statement is not:
+The point is not to claim a true theory of quantum gravity right away. The point is to build an honest search loop for a shared effective formula inside a controlled oracle world.
 
-- there is no math at all that describes both quantum and gravitational effects
+## What Is In This Repo
 
-Instead, it is:
+- [simulation.py](/Users/jonathan.hendler/personal/gut/simulation.py): fixed oracle for the toy physics model
+- [train.py](/Users/jonathan.hendler/personal/gut/train.py): local experiment runner that scores candidate unified formulas
+- [program.md](/Users/jonathan.hendler/personal/gut/program.md): instructions for the outer `autoresearch`-style LLM loop
+- [REQUIREMENTS.md](/Users/jonathan.hendler/personal/gut/REQUIREMENTS.md): design requirements and research framing
+- [tests/test_simulation.py](/Users/jonathan.hendler/personal/gut/tests/test_simulation.py): oracle contract tests
+- [tests/test_train.py](/Users/jonathan.hendler/personal/gut/tests/test_train.py): experiment contract tests
 
-- there is no final, experimentally confirmed, fundamental unified theory of quantum gravity
+## Two Separate Things
 
-We do have mathematical frameworks that describe measurable outputs very well in regimes where quantum mechanics and gravity both matter.
+There are two different layers here.
 
-## Short Answer
+### 1. Local evaluator
 
-There are two useful answers, depending on what "simplest" means.
+This runs entirely on your machine:
 
-### 1. Simplest overall practical model
+- `simulation.py` generates the fixed oracle outputs
+- `train.py` searches over candidate formulas and prints a scalar score
+- tests check that the contract still holds
 
-A single neutron or atom in Earth's gravitational field.
+No API key is required for this part.
 
-Examples:
+### 2. Outer autoresearch loop
 
-- a neutron quantum bouncer
-- an atom interferometer
+This is the real `autoresearch` part:
 
-In these systems:
+- an LLM reads the repo instructions
+- edits `train.py`
+- runs the tests
+- runs `train.py`
+- compares the new score to the old score
+- keeps or discards the change
+- repeats
 
-- quantum mechanics describes the wavefunction, superposition, interference, and measurement probabilities
-- gravity enters as a classical gravitational potential or proper-time shift
+This part does require LLM access if you want it to run unattended.
 
-This is real physics and experimentally meaningful, but it is not a deep quantum-gravity case because gravity is treated as a classical background.
+That LLM access can come from:
 
-### 2. Simplest genuine quantum-plus-self-gravity model
+- a live Codex session like this one
+- another coding agent
+- an API-backed agent runner
 
-Two small masses, each in a spatial quantum superposition, interacting only through gravity.
+So the short rule is:
 
-This is the cleanest minimal model if the goal is to see both:
+- local scoring and testing: no API key
+- autonomous LLM researcher: yes, some LLM access is needed
 
-- genuinely quantum behavior
-- gravity produced by the masses themselves affecting the measurable outcome
+## Physics Model
 
-This is the smallest clean setup where gravity can generate a quantum phase difference and, in principle, entanglement.
-
-## Minimal Genuine Model
-
-Take two masses, `m1` and `m2`. Each mass has two possible positions:
+Each mass has two possible positions:
 
 - `|L>`
 - `|R>`
 
-The joint basis states are:
+The branch basis is:
 
 - `|LL>`
 - `|LR>`
 - `|RL>`
 - `|RR>`
 
-### Initial state
-
-Each mass starts in an equal superposition:
-
-```text
-|psi(0)> = (|L> + |R>)/sqrt(2)  ⊗  (|L> + |R>)/sqrt(2)
-```
-
-### Gravitational interaction
-
-For each branch `ab`, where `a,b ∈ {L,R}`, the gravitational potential energy is:
+For branch `ab`, the oracle uses a branch-dependent gravitational potential:
 
 ```text
 U_ab = -G m1 m2 / r_ab
 ```
 
-where `r_ab` is the distance between the two masses in that branch.
-
-### Hamiltonian
-
-During the interaction, the Hamiltonian is diagonal in the branch basis:
+and the corresponding quantum phase:
 
 ```text
-H = Σ_ab U_ab |ab><ab|
+phi_ab = -U_ab t / hbar
 ```
 
-### Time evolution
+The toy oracle then derives:
 
-Each branch picks up a different phase:
+- gravity outputs such as branch forces and mean potential
+- quantum outputs such as recombined probabilities and concurrence
+
+## Current Baseline
+
+The current baseline search in [train.py](/Users/jonathan.hendler/personal/gut/train.py) recovers the expected shared potential:
 
 ```text
-|psi(t)> = 1/2 Σ_ab exp(-i U_ab t / hbar) |ab>
+V(r) = -1.000000*mu/r
 ```
 
-This means gravity changes the relative phases between branches.
-
-After the interaction, recombine the branches and measure:
-
-- interference probabilities
-- correlation functions
-- entanglement witnesses
-
-## What Each Theory Contributes
-
-### Quantum mechanics gives
-
-- superposition
-- phase evolution
-- interference
-- measurement probabilities
-- entanglement structure
-
-### Gravity or weak-field relativity gives
-
-- the branch-dependent energies `U_ab`
-- equivalently, branch-dependent proper-time shifts
-
-The same phase can also be written in relativistic language as:
+with baseline output:
 
 ```text
-phi_ab = m c^2 tau_ab / hbar
+unified_score: 0.010000
+val_bpb:       0.010000
+gravity_error: 0.000000
+quantum_error: 0.000000
 ```
 
-So in this weak-field regime:
+Here `val_bpb` is only a compatibility alias for the `autoresearch`-style log format. It does not mean bits per byte in this repo.
 
-- Newtonian gravity gives the potential-energy picture
-- weak-field general relativity gives the proper-time picture
-- both describe the same measurable phase shift
+## How To Use Locally
 
-## Why This Is the Minimal Interesting Case
+### Run the tests
 
-A one-particle model is simpler, but then gravity is just an external background field.
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-Two particles are the minimal clean case where:
+### Preview the oracle
 
-- the masses themselves source the gravitational effect
-- the gravitational effect changes a quantum observable
+```bash
+python3 simulation.py --samples 4 --seed 0
+```
 
-That makes the two-mass superposition model the simplest genuine example matching the spirit of the question.
+### Run one local evaluation
 
-## Even Simpler Equation If You Only Want Gravity as Background
+```bash
+python3 train.py
+```
 
-For a neutron or atom above a mirror in Earth's gravity, a standard model is:
+By default this now runs a 300-second bounded search, closer to the original `autoresearch` pattern.
+
+For a quick smoke test, use:
+
+```bash
+TIME_BUDGET_SECONDS=5 python3 train.py
+```
+
+This prints the main metrics, including how many search rounds fit inside the budget, and writes a diagnostic plot to:
+
+- [results/diagnostics.svg](/Users/jonathan.hendler/personal/gut/results/diagnostics.svg)
+
+## How To Use With An LLM In The Loop
+
+If you want the true `autoresearch` pattern, use the repo like this:
+
+1. Make sure the repo is clean and committed.
+2. Initialize `results.tsv` if it does not exist yet.
+3. Give the agent [program.md](/Users/jonathan.hendler/personal/gut/program.md) as the outer-loop policy.
+4. Keep [simulation.py](/Users/jonathan.hendler/personal/gut/simulation.py) fixed.
+5. Let the agent modify only [train.py](/Users/jonathan.hendler/personal/gut/train.py).
+6. Require the agent to run the test suite before trusting an experiment.
+7. Require the agent to keep or discard each experiment based on `unified_score`.
+
+The baseline setup now mirrors upstream more closely:
+
+- each run of [train.py](/Users/jonathan.hendler/personal/gut/train.py) uses a fixed time budget
+- inside that budget it performs repeated search rounds
+- then the outer LLM loop decides how to modify `train.py` for the next run
+
+The default time budget is 300 seconds. You can override it for smoke tests with `TIME_BUDGET_SECONDS`.
+
+## Suggested Results Log
+
+Create a local `results.tsv` with this header:
 
 ```text
-i hbar ∂psi/∂t = [-(hbar^2/2m) ∂^2/∂z^2 + mgz] psi
+commit	val_bpb	memory_gb	status	description
 ```
 
-with a boundary condition at the mirror.
+Use the columns as:
 
-This produces real measurable outputs, but it is not a full self-gravitating quantum system.
+- `commit`: short git hash
+- `val_bpb`: unified score
+- `memory_gb`: `0.0` for now
+- `status`: `keep`, `discard`, or `crash`
+- `description`: short summary of the change
 
-## Best Summary
+## Current Limits
 
-- Simplest overall: one particle in a classical gravitational field
-- Simplest genuine quantum-plus-self-gravity model: two masses in spatial superposition interacting gravitationally
+This repo does not yet prove a true theory of quantum gravity.
 
-## Final Takeaway
+What it does provide is:
 
-The strongest literal version of the original question is too strong. It is not that there is "no math" describing both aspects at all. Rather:
+- a fixed oracle world
+- a shared-formula scoring problem
+- a testable local evaluator
+- an outer-loop policy that an LLM can use to perform repeated research iterations
 
-- we can model measurable outputs in regimes where quantum mechanics and gravity both matter
-- but we do not yet have one complete, experimentally confirmed, fundamental theory of quantum gravity
-
-That is why the two-mass superposition model is the cleanest minimal example.
+That is the correct starting point for an `autoresearch`-style search here.

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import itertools
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import simulation
+
+DEFAULT_TIME_BUDGET_SECONDS = float(os.environ.get("TIME_BUDGET_SECONDS", "300"))
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,7 @@ class SearchConfig:
     quantum_weight: float = 1.0
     limit_weight: float = 0.1
     complexity_weight: float = 0.01
+    time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS
     output_dir: str = "results"
 
 
@@ -107,6 +111,7 @@ class ExperimentResult:
     formula_text: str
     plot_path: str
     num_terms: int
+    search_rounds: int
     duration_seconds: float
 
 
@@ -280,6 +285,20 @@ def search_best_formula(
     return best_formula, best_metrics
 
 
+def _is_better_candidate(
+    formula: CandidateFormula,
+    metrics: tuple[float, float, float, float, float],
+    best_formula: CandidateFormula,
+    best_metrics: tuple[float, float, float, float, float],
+) -> bool:
+    score_epsilon = 1e-12
+    if metrics[0] < best_metrics[0] - score_epsilon:
+        return True
+    if abs(metrics[0] - best_metrics[0]) <= score_epsilon and len(formula.terms) < len(best_formula.terms):
+        return True
+    return False
+
+
 def _svg_scatter_points(values: list[tuple[float, float]], x0: int, y0: int, width: int, height: int, color: str) -> str:
     xs = [point[0] for point in values]
     ys = [point[1] for point in values]
@@ -348,22 +367,41 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
     config = config or SearchConfig()
     t0 = time.time()
 
-    train_dataset = simulation.make_dataset(config.num_train, seed=config.seed)
-    val_dataset = simulation.make_dataset(config.num_val, seed=config.seed + 1)
-
     zero_formula = CandidateFormula(terms=(), coefficients=())
-    zero_formula_score = score_formula(zero_formula, val_dataset, config)[0]
+    best_formula = zero_formula
+    best_metrics = None
+    best_val_dataset = None
+    search_rounds = 0
 
-    best_formula, metrics = search_best_formula(train_dataset, val_dataset, config)
-    prediction = predict_dataset(best_formula, val_dataset)
+    while True:
+        round_seed = config.seed + 1000 * search_rounds
+        train_dataset = simulation.make_dataset(config.num_train, seed=round_seed)
+        val_dataset = simulation.make_dataset(config.num_val, seed=round_seed + 1)
+
+        if search_rounds == 0:
+            best_metrics = score_formula(zero_formula, val_dataset, config)
+            best_val_dataset = val_dataset
+
+        formula, metrics = search_best_formula(train_dataset, val_dataset, config)
+        if best_metrics is None or _is_better_candidate(formula, metrics, best_formula, best_metrics):
+            best_formula = formula
+            best_metrics = metrics
+            best_val_dataset = val_dataset
+
+        search_rounds += 1
+        if search_rounds >= 1 and (time.time() - t0) >= config.time_budget_seconds:
+            break
+
+    zero_formula_score = best_metrics[0] if best_formula == zero_formula else score_formula(zero_formula, best_val_dataset, config)[0]
+    prediction = predict_dataset(best_formula, best_val_dataset)
     plot_path = save_diagnostic_plot(
-        val_dataset,
+        best_val_dataset,
         prediction,
         best_formula.formula_text(),
         config.output_dir,
     )
 
-    unified_score, gravity_error, quantum_error, asymptotic_penalty, complexity = metrics
+    unified_score, gravity_error, quantum_error, asymptotic_penalty, complexity = best_metrics
     return ExperimentResult(
         unified_score=unified_score,
         val_bpb=unified_score,
@@ -375,6 +413,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
         formula_text=best_formula.formula_text(),
         plot_path=plot_path,
         num_terms=len(best_formula.terms),
+        search_rounds=search_rounds,
         duration_seconds=time.time() - t0,
     )
 
@@ -390,6 +429,8 @@ def main() -> None:
     print(f"complexity:       {result.complexity_penalty:.6f}")
     print(f"zero_formula:     {result.zero_formula_score:.6f}")
     print(f"num_terms:        {result.num_terms}")
+    print(f"search_rounds:    {result.search_rounds}")
+    print(f"time_budget_s:    {DEFAULT_TIME_BUDGET_SECONDS:.2f}")
     print(f"seconds:          {result.duration_seconds:.2f}")
     print(f"plot_path:        {result.plot_path}")
     print(f"formula:          {result.formula_text}")
