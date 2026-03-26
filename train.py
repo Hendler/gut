@@ -16,12 +16,12 @@ class SearchConfig:
     num_train: int = 256
     num_val: int = 128
     seed: int = 42
-    max_terms: int = 2
+    max_terms: int = 3
     ridge: float = 1e-8
     gravity_weight: float = 1.0
     quantum_weight: float = 1.0
     limit_weight: float = 0.1
-    complexity_weight: float = 0.01
+    complexity_weight: float = 0.001
     time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS
     output_dir: str = "results"
 
@@ -30,30 +30,42 @@ class SearchConfig:
 class FormulaTerm:
     name: str
 
-    def value(self, mu: float, r: float) -> float:
+    def value(self, input_row: list[float], r: float) -> float:
+        mu = input_row[0] * input_row[1]
+        total_mass = input_row[0] + input_row[1]
+        wavepacket_width = input_row[6]
+        r_eff = simulation.effective_distance(r, wavepacket_width)
         if self.name == "mu/r":
             return mu / r
-        if self.name == "mu/r^2":
-            return mu / (r * r)
-        if self.name == "mu/r^3":
-            return mu / (r * r * r)
-        if self.name == "mu":
-            return mu
-        if self.name == "mu*r":
-            return mu * r
+        if self.name == "mu/r_eff":
+            return mu / r_eff
+        if self.name == "mu/r_eff^2":
+            return mu / (r_eff * r_eff)
+        if self.name == "mu/r_eff^3":
+            return mu / (r_eff * r_eff * r_eff)
+        if self.name == "mu*M/r_eff^2":
+            return mu * total_mass / (r_eff * r_eff)
+        if self.name == "mu*sigma^2/r_eff^3":
+            return mu * wavepacket_width * wavepacket_width / (r_eff * r_eff * r_eff)
         raise KeyError(f"Unknown basis term: {self.name}")
 
-    def derivative(self, mu: float, r: float) -> float:
+    def derivative(self, input_row: list[float], r: float) -> float:
+        mu = input_row[0] * input_row[1]
+        total_mass = input_row[0] + input_row[1]
+        wavepacket_width = input_row[6]
+        r_eff = simulation.effective_distance(r, wavepacket_width)
         if self.name == "mu/r":
             return -mu / (r * r)
-        if self.name == "mu/r^2":
-            return -2.0 * mu / (r * r * r)
-        if self.name == "mu/r^3":
-            return -3.0 * mu / (r * r * r * r)
-        if self.name == "mu":
-            return 0.0
-        if self.name == "mu*r":
-            return mu
+        if self.name == "mu/r_eff":
+            return -mu * r / (r_eff ** 3)
+        if self.name == "mu/r_eff^2":
+            return -2.0 * mu * r / (r_eff ** 4)
+        if self.name == "mu/r_eff^3":
+            return -3.0 * mu * r / (r_eff ** 5)
+        if self.name == "mu*M/r_eff^2":
+            return -2.0 * mu * total_mass * r / (r_eff ** 4)
+        if self.name == "mu*sigma^2/r_eff^3":
+            return -3.0 * mu * wavepacket_width * wavepacket_width * r / (r_eff ** 5)
         raise KeyError(f"Unknown basis term: {self.name}")
 
 
@@ -62,25 +74,25 @@ class CandidateFormula:
     terms: tuple[FormulaTerm, ...]
     coefficients: tuple[float, ...]
 
-    def predict_branch_potentials(self, mu: float, branch_distances: list[float]) -> list[float]:
+    def predict_branch_potentials(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
         if not self.terms:
             return [0.0 for _ in branch_distances]
         potentials = []
         for distance in branch_distances:
             value = 0.0
             for coefficient, term in zip(self.coefficients, self.terms):
-                value += coefficient * term.value(mu, distance)
+                value += coefficient * term.value(input_row, distance)
             potentials.append(value)
         return potentials
 
-    def predict_branch_forces(self, mu: float, branch_distances: list[float]) -> list[float]:
+    def predict_branch_forces(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
         if not self.terms:
             return [0.0 for _ in branch_distances]
         forces = []
         for distance in branch_distances:
             derivative = 0.0
             for coefficient, term in zip(self.coefficients, self.terms):
-                derivative += coefficient * term.derivative(mu, distance)
+                derivative += coefficient * term.derivative(input_row, distance)
             forces.append(abs(-derivative))
         return forces
 
@@ -117,7 +129,7 @@ class ExperimentResult:
 
 BASIS_LIBRARY = tuple(
     FormulaTerm(name)
-    for name in ("mu/r", "mu/r^2", "mu/r^3", "mu", "mu*r")
+    for name in ("mu/r", "mu/r_eff", "mu/r_eff^2", "mu/r_eff^3", "mu*M/r_eff^2", "mu*sigma^2/r_eff^3")
 )
 
 
@@ -143,9 +155,8 @@ def _design_matrix(dataset: dict[str, object], terms: tuple[FormulaTerm, ...]) -
     inputs = dataset["inputs"]
     distances = dataset["branch_distances"]
     for input_row, distance_row in zip(inputs, distances):
-        mu = input_row[0] * input_row[1]
         for distance in distance_row:
-            matrix.append([term.value(mu, distance) for term in terms])
+            matrix.append([term.value(input_row, distance) for term in terms])
     return matrix
 
 
@@ -211,17 +222,23 @@ def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> Pr
     quantum_targets = []
 
     for input_row, branch_distances in zip(dataset["inputs"], dataset["branch_distances"]):
-        mu = input_row[0] * input_row[1]
         interaction_time = input_row[5]
-        branch_potentials = formula.predict_branch_potentials(mu, branch_distances)
-        branch_forces = formula.predict_branch_forces(mu, branch_distances)
-        gravity_targets.append([_mean(branch_potentials), _mean(branch_forces)])
+        total_mass = input_row[0] + input_row[1]
+        wavepacket_width = input_row[6]
+        coherence_length = input_row[7]
+        branch_potentials = formula.predict_branch_potentials(input_row, branch_distances)
+        branch_forces = formula.predict_branch_forces(input_row, branch_distances)
+        gravity_targets.append([_mean(branch_potentials), _mean(branch_forces), simulation._std(branch_forces)])
 
-        quantum = simulation.quantum_observables_from_branch_potentials(
+        quantum = simulation.quantum_observables_from_branch_dynamics(
             branch_potentials,
+            branch_forces,
             interaction_time=interaction_time,
+            total_mass=total_mass,
+            wavepacket_width=wavepacket_width,
+            coherence_length=coherence_length,
         )
-        quantum_targets.append(list(quantum.recombined_probabilities) + [quantum.concurrence])
+        quantum_targets.append(list(quantum.recombined_probabilities) + [quantum.concurrence, quantum.visibility])
 
     return PredictionBundle(
         gravity_targets=gravity_targets,
@@ -233,14 +250,24 @@ def limit_penalty(formula: CandidateFormula) -> float:
     if not formula.terms:
         return 1.0
 
+    config = simulation.OracleConfig()
+    pn_prefactor = (
+        config.gravitational_constant * config.gravitational_constant
+        / (2.0 * config.speed_of_light * config.speed_of_light)
+    )
     prediction = []
     target = []
-    for mu in (0.8, 1.0, 1.5):
+    for m1, m2, distance, sigma in ((1.0, 0.8, 8.0, 0.2), (1.2, 1.0, 12.0, 0.3), (1.4, 1.1, 20.0, 0.4)):
         pred_row = []
         target_row = []
-        for distance in (8.0, 12.0, 20.0):
-            pred_row.append(formula.predict_branch_potentials(mu, [distance])[0])
-            target_row.append(-mu / distance)
+        for offset in (0.0, 2.0, 6.0):
+            mu = m1 * m2
+            total_mass = m1 + m2
+            shifted_distance = distance + offset
+            input_row = [m1, m2, shifted_distance, 0.2, 0.2, 1.0, sigma, 1.5]
+            r_eff = simulation.effective_distance(shifted_distance, sigma)
+            pred_row.append(formula.predict_branch_potentials(input_row, [shifted_distance])[0])
+            target_row.append(-mu / r_eff - pn_prefactor * mu * total_mass / (r_eff * r_eff))
         prediction.append(pred_row)
         target.append(target_row)
     return _normalized_mse(prediction, target)
@@ -344,7 +371,7 @@ def save_diagnostic_plot(
         (oracle_row[0], pred_row[0])
         for oracle_row, pred_row in zip(dataset["gravity_targets"], prediction.gravity_targets)
     ]
-    concurrence_points = [
+    visibility_points = [
         (oracle_row[-1], pred_row[-1])
         for oracle_row, pred_row in zip(dataset["quantum_targets"], prediction.quantum_targets)
     ]
@@ -354,9 +381,9 @@ def save_diagnostic_plot(
 <text x="30" y="35" font-family="Courier New" font-size="16" fill="#111111">Unified Formula Diagnostics</text>
 <text x="30" y="60" font-family="Courier New" font-size="12" fill="#333333">{formula_text}</text>
 <text x="80" y="95" font-family="Courier New" font-size="12" fill="#111111">Mean Potential: Oracle vs Predicted</text>
-<text x="520" y="95" font-family="Courier New" font-size="12" fill="#111111">Concurrence: Oracle vs Predicted</text>
+<text x="520" y="95" font-family="Courier New" font-size="12" fill="#111111">Visibility: Oracle vs Predicted</text>
 {_svg_scatter_points(potential_points, 40, 110, 360, 250, "#1f77b4")}
-{_svg_scatter_points(concurrence_points, 480, 110, 360, 250, "#d62728")}
+{_svg_scatter_points(visibility_points, 480, 110, 360, 250, "#d62728")}
 </svg>
 """
     plot_path.write_text(svg)
