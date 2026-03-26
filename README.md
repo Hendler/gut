@@ -8,6 +8,8 @@ The current toy world is:
 - each mass in a two-position spatial superposition
 - weak-field gravity
 - quantum phase accumulation from branch-dependent gravitational interaction
+- finite wavepacket size
+- coherence-dependent visibility loss
 
 The point is not to claim a true theory of quantum gravity right away. The point is to build an honest search loop for a shared effective formula inside a controlled oracle world.
 
@@ -88,21 +90,27 @@ phi_ab = -U_ab t / hbar
 The toy oracle then derives:
 
 - gravity outputs such as branch forces and mean potential
-- quantum outputs such as recombined probabilities and concurrence
+- quantum outputs such as recombined probabilities, concurrence, and visibility
+
+The current oracle is harder than the original Newtonian toy. It now includes:
+
+- softened effective distance from finite wavepacket size
+- a weak-field post-Newtonian correction term
+- quantum visibility loss driven by branch force spread and coherence length
 
 ## Current Baseline
 
 The current baseline search in [train.py](/Users/jonathan.hendler/personal/gut/train.py) recovers the expected shared potential:
 
 ```text
-V(r) = -1.000000*mu/r
+V(r) = -1.000000*mu/r_eff -0.007813*mu*M/r_eff^2
 ```
 
 with baseline output:
 
 ```text
-unified_score: 0.010000
-val_bpb:       0.010000
+unified_score: 0.000000
+val_bpb:       0.000000
 gravity_error: 0.000000
 quantum_error: 0.000000
 ```
