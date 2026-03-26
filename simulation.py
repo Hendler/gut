@@ -19,11 +19,10 @@ UNIFORM_PROBABILITIES = (0.25, 0.25, 0.25, 0.25)
 
 @dataclass(frozen=True)
 class OracleConfig:
-    gravitational_constant: float = 1.0
-    hbar: float = 1.0
-    speed_of_light: float = 8.0
-    min_distance: float = 0.25
-    correlation_strength: float = 0.18
+    gravitational_constant: float = 6.67430e-11
+    hbar: float = 1.054571817e-34
+    speed_of_light: float = 299792458.0
+    min_distance: float = 5.0e-6
 
 
 @dataclass(frozen=True)
@@ -77,6 +76,10 @@ class OracleOutputs:
 
 def _validate_sample(sample: OracleSample, config: OracleConfig) -> None:
     nearest_distance = sample.base_distance - 0.5 * (sample.delta1 + sample.delta2)
+    if sample.m1 <= 0.0 or sample.m2 <= 0.0:
+        raise ValueError("Masses must be positive.")
+    if sample.interaction_time <= 0.0:
+        raise ValueError("Interaction time must be positive.")
     if nearest_distance <= config.min_distance:
         raise ValueError(
             "Sample geometry is invalid: nearest branch distance must stay above min_distance."
@@ -113,27 +116,14 @@ def branch_distances(sample: OracleSample, config: OracleConfig | None = None) -
     )
 
 
+def _gaussian_smearing_factor(distance: float, wavepacket_width: float) -> float:
+    sigma = max(wavepacket_width, 1e-18)
+    return math.erf(distance / (2.0 * sigma))
+
+
 def effective_distance(distance: float, wavepacket_width: float) -> float:
-    return math.sqrt(distance * distance + wavepacket_width * wavepacket_width)
-
-
-def _geometry_correlation_term(
-    sample: OracleSample,
-    distance: float,
-    effective_distance_value: float,
-    config: OracleConfig,
-) -> float:
-    base_scale = max(sample.base_distance * sample.coherence_length, 1e-9)
-    geometry_scale = (sample.delta1 * sample.delta2) / base_scale
-    branch_offset = (distance - sample.base_distance) / max(sample.base_distance, 1e-9)
-    overlap = math.exp(-distance / sample.coherence_length)
-    return (
-        config.correlation_strength
-        * geometry_scale
-        * (1.0 + branch_offset * branch_offset)
-        * overlap
-        / (effective_distance_value * effective_distance_value)
-    )
+    smearing = max(_gaussian_smearing_factor(distance, wavepacket_width), 1e-18)
+    return distance / smearing
 
 
 def branch_potential(
@@ -142,16 +132,8 @@ def branch_potential(
     config: OracleConfig | None = None,
 ) -> float:
     config = config or OracleConfig()
-    mu = sample.m1 * sample.m2
-    total_mass = sample.m1 + sample.m2
-    g = config.gravitational_constant
-    c_sq = config.speed_of_light * config.speed_of_light
-    compactness_scale = g * total_mass / (2.0 * c_sq)
-    rho = effective_distance(distance, sample.wavepacket_width)
-    inverse_rho = 1.0 / rho
-    inverse_rho_sq = inverse_rho * inverse_rho
-    correlation_term = _geometry_correlation_term(sample, distance, rho, config)
-    return -g * mu * (inverse_rho + compactness_scale * inverse_rho_sq + correlation_term)
+    smearing = _gaussian_smearing_factor(distance, sample.wavepacket_width)
+    return -config.gravitational_constant * sample.m1 * sample.m2 * smearing / distance
 
 
 def branch_force(
@@ -160,12 +142,15 @@ def branch_force(
     config: OracleConfig | None = None,
 ) -> float:
     config = config or OracleConfig()
-    step = min(1e-3, 0.02 * max(distance, config.min_distance))
-    left_distance = max(config.min_distance + 1e-4, distance - step)
-    right_distance = distance + step
-    left_potential = branch_potential(sample, left_distance, config)
-    right_potential = branch_potential(sample, right_distance, config)
-    return abs(-(right_potential - left_potential) / (right_distance - left_distance))
+    g = config.gravitational_constant
+    mu = sample.m1 * sample.m2
+    sigma = max(sample.wavepacket_width, 1e-18)
+    smearing = _gaussian_smearing_factor(distance, sigma)
+    gaussian_tail = math.exp(-(distance * distance) / (4.0 * sigma * sigma))
+    force = g * mu * (
+        smearing / (distance * distance) - gaussian_tail / (math.sqrt(math.pi) * sigma * distance)
+    )
+    return max(0.0, force)
 
 
 def quantum_observables_from_branch_dynamics(
@@ -175,33 +160,37 @@ def quantum_observables_from_branch_dynamics(
     total_mass: float,
     wavepacket_width: float,
     coherence_length: float,
-    hbar: float = 1.0,
-    speed_of_light: float = 8.0,
+    path_separations: tuple[float, float] = (0.0, 0.0),
+    hbar: float = 1.054571817e-34,
+    speed_of_light: float = 299792458.0,
 ) -> QuantumOutputs:
+    del branch_forces
+    total_rest_energy = max(total_mass * speed_of_light * speed_of_light, 1e-30)
     branch_redshift_factors = []
     phases = []
-    compactness_scale = max(total_mass * speed_of_light * speed_of_light, 1e-9)
 
     for potential in branch_potentials:
-        reduced_potential = potential / compactness_scale
-        redshift = 1.0 + reduced_potential - 0.5 * reduced_potential * reduced_potential
-        branch_redshift_factors.append(redshift)
-        phase = (-potential + 0.5 * potential * potential / compactness_scale) * interaction_time / hbar
-        phases.append(phase)
+        branch_redshift_factors.append(max(0.0, 1.0 + potential / total_rest_energy))
+        phases.append(-potential * interaction_time / hbar)
 
     amplitudes = tuple(cmath.exp(1j * phase) / 2.0 for phase in phases)
-    coherent = []
+    coherent_probabilities = []
     for row in HADAMARD_2Q:
         amplitude = sum(weight * branch for weight, branch in zip(row, amplitudes))
-        coherent.append(float((amplitude.conjugate() * amplitude).real))
+        coherent_probabilities.append(float((amplitude.conjugate() * amplitude).real))
 
     pure_concurrence = 2.0 * abs(amplitudes[0] * amplitudes[3] - amplitudes[1] * amplitudes[2])
-    force_spread = _std(branch_forces)
-    dephasing_argument = force_spread * interaction_time * wavepacket_width / (hbar * coherence_length)
-    visibility = math.exp(-(dephasing_argument ** 2))
+    rho_offdiag = amplitudes[0] * amplitudes[2].conjugate() + amplitudes[1] * amplitudes[3].conjugate()
+    intrinsic_visibility = min(1.0, 2.0 * abs(rho_offdiag))
+    overlap_exponent = -(
+        path_separations[0] * path_separations[0] + path_separations[1] * path_separations[1]
+    ) / (8.0 * coherence_length * coherence_length)
+    overlap_visibility = math.exp(overlap_exponent)
+    visibility = max(0.0, min(1.0, intrinsic_visibility * overlap_visibility))
+
     probabilities = tuple(
-        visibility * coherent_probability + (1.0 - visibility) * uniform_probability
-        for coherent_probability, uniform_probability in zip(coherent, UNIFORM_PROBABILITIES)
+        overlap_visibility * coherent_probability + (1.0 - overlap_visibility) * uniform_probability
+        for coherent_probability, uniform_probability in zip(coherent_probabilities, UNIFORM_PROBABILITIES)
     )
     total_probability = sum(probabilities)
     normalized_probabilities = tuple(probability / total_probability for probability in probabilities)
@@ -210,8 +199,8 @@ def quantum_observables_from_branch_dynamics(
         branch_redshift_factors=tuple(branch_redshift_factors),
         branch_phases=tuple(phases),
         recombined_probabilities=normalized_probabilities,
-        concurrence=float(max(0.0, min(1.0, visibility * pure_concurrence))),
-        visibility=float(max(0.0, min(1.0, visibility))),
+        concurrence=float(max(0.0, min(1.0, pure_concurrence * overlap_visibility))),
+        visibility=float(visibility),
     )
 
 
@@ -222,8 +211,6 @@ def oracle(sample: OracleSample, config: OracleConfig | None = None) -> OracleOu
         effective_distance(distance, sample.wavepacket_width)
         for distance in distances
     )
-
-    total_mass = sample.m1 + sample.m2
     potentials = [branch_potential(sample, distance, config) for distance in distances]
     forces = [branch_force(sample, distance, config) for distance in distances]
 
@@ -231,9 +218,10 @@ def oracle(sample: OracleSample, config: OracleConfig | None = None) -> OracleOu
         potentials,
         forces,
         interaction_time=sample.interaction_time,
-        total_mass=total_mass,
+        total_mass=sample.m1 + sample.m2,
         wavepacket_width=sample.wavepacket_width,
         coherence_length=sample.coherence_length,
+        path_separations=(sample.delta1, sample.delta2),
         hbar=config.hbar,
         speed_of_light=config.speed_of_light,
     )
@@ -295,47 +283,47 @@ def make_dataset(
 def _sample_from_regime(rng: random.Random, regime: str) -> OracleSample:
     if regime == "train":
         return OracleSample(
-            m1=rng.uniform(0.6, 1.8),
-            m2=rng.uniform(0.6, 1.8),
-            base_distance=rng.uniform(2.2, 4.8),
-            delta1=rng.uniform(0.2, 0.9),
-            delta2=rng.uniform(0.2, 0.9),
-            interaction_time=rng.uniform(0.4, 1.6),
-            wavepacket_width=rng.uniform(0.12, 0.45),
-            coherence_length=rng.uniform(1.0, 2.4),
+            m1=rng.uniform(0.8e-14, 3.0e-14),
+            m2=rng.uniform(0.8e-14, 3.0e-14),
+            base_distance=rng.uniform(1.8e-4, 6.0e-4),
+            delta1=rng.uniform(2.0e-5, 1.2e-4),
+            delta2=rng.uniform(2.0e-5, 1.2e-4),
+            interaction_time=rng.uniform(0.2, 3.0),
+            wavepacket_width=rng.uniform(5.0e-6, 4.0e-5),
+            coherence_length=rng.uniform(6.0e-5, 2.5e-4),
         )
     if regime == "heldout_compact":
         return OracleSample(
-            m1=rng.uniform(1.2, 2.2),
-            m2=rng.uniform(1.1, 2.1),
-            base_distance=rng.uniform(1.1, 2.2),
-            delta1=rng.uniform(0.5, 1.1),
-            delta2=rng.uniform(0.5, 1.1),
-            interaction_time=rng.uniform(0.8, 2.0),
-            wavepacket_width=rng.uniform(0.25, 0.75),
-            coherence_length=rng.uniform(0.8, 1.6),
+            m1=rng.uniform(2.0e-14, 6.0e-14),
+            m2=rng.uniform(2.0e-14, 6.0e-14),
+            base_distance=rng.uniform(7.0e-5, 1.8e-4),
+            delta1=rng.uniform(3.0e-5, 1.0e-4),
+            delta2=rng.uniform(3.0e-5, 1.0e-4),
+            interaction_time=rng.uniform(0.5, 5.0),
+            wavepacket_width=rng.uniform(1.0e-5, 7.5e-5),
+            coherence_length=rng.uniform(5.0e-5, 2.0e-4),
         )
     if regime == "heldout_decoherent":
         return OracleSample(
-            m1=rng.uniform(0.7, 1.9),
-            m2=rng.uniform(0.7, 1.9),
-            base_distance=rng.uniform(2.0, 4.4),
-            delta1=rng.uniform(0.4, 1.2),
-            delta2=rng.uniform(0.4, 1.2),
-            interaction_time=rng.uniform(1.0, 2.4),
-            wavepacket_width=rng.uniform(0.2, 0.7),
-            coherence_length=rng.uniform(0.25, 0.9),
+            m1=rng.uniform(0.8e-14, 3.5e-14),
+            m2=rng.uniform(0.8e-14, 3.5e-14),
+            base_distance=rng.uniform(1.8e-4, 5.0e-4),
+            delta1=rng.uniform(4.0e-5, 1.5e-4),
+            delta2=rng.uniform(4.0e-5, 1.5e-4),
+            interaction_time=rng.uniform(0.5, 4.0),
+            wavepacket_width=rng.uniform(8.0e-6, 5.0e-5),
+            coherence_length=rng.uniform(1.5e-5, 6.0e-5),
         )
     if regime == "heldout_wide":
         return OracleSample(
-            m1=rng.uniform(0.5, 1.5),
-            m2=rng.uniform(0.5, 1.5),
-            base_distance=rng.uniform(4.8, 8.0),
-            delta1=rng.uniform(0.15, 0.6),
-            delta2=rng.uniform(0.15, 0.6),
-            interaction_time=rng.uniform(0.3, 1.4),
-            wavepacket_width=rng.uniform(0.08, 0.3),
-            coherence_length=rng.uniform(1.4, 3.4),
+            m1=rng.uniform(0.6e-14, 2.0e-14),
+            m2=rng.uniform(0.6e-14, 2.0e-14),
+            base_distance=rng.uniform(7.0e-4, 2.0e-3),
+            delta1=rng.uniform(1.0e-5, 7.0e-5),
+            delta2=rng.uniform(1.0e-5, 7.0e-5),
+            interaction_time=rng.uniform(0.1, 2.5),
+            wavepacket_width=rng.uniform(3.0e-6, 2.0e-5),
+            coherence_length=rng.uniform(8.0e-5, 4.0e-4),
         )
     raise ValueError(f"Unknown regime: {regime}")
 

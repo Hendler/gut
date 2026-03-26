@@ -5,16 +5,52 @@ import simulation
 
 
 class SimulationOracleTests(unittest.TestCase):
+    def test_gaussian_smeared_potential_recovers_newtonian_limit_far_away(self):
+        sample = simulation.OracleSample(
+            m1=1.6e-14,
+            m2=1.2e-14,
+            base_distance=9.0e-4,
+            delta1=4.0e-5,
+            delta2=5.0e-5,
+            interaction_time=1.0,
+            wavepacket_width=4.0e-6,
+            coherence_length=1.5e-4,
+        )
+        distance = sample.base_distance
+        softened = simulation.branch_potential(sample, distance)
+        point_mass = -simulation.OracleConfig().gravitational_constant * sample.m1 * sample.m2 / distance
+
+        self.assertTrue(isclose(softened, point_mass, rel_tol=5e-4, abs_tol=0.0))
+
+    def test_gaussian_smearing_softens_short_range_force(self):
+        sample = simulation.OracleSample(
+            m1=2.0e-14,
+            m2=1.8e-14,
+            base_distance=7.0e-5,
+            delta1=1.0e-5,
+            delta2=1.2e-5,
+            interaction_time=1.0,
+            wavepacket_width=3.5e-5,
+            coherence_length=1.2e-4,
+        )
+        distance = sample.base_distance
+        softened_force = simulation.branch_force(sample, distance)
+        point_mass_force = (
+            simulation.OracleConfig().gravitational_constant * sample.m1 * sample.m2 / (distance * distance)
+        )
+
+        self.assertLess(softened_force, point_mass_force)
+
     def test_oracle_outputs_are_well_formed_and_deterministic(self):
         sample = simulation.OracleSample(
-            m1=1.2,
-            m2=0.9,
-            base_distance=3.0,
-            delta1=0.4,
-            delta2=0.6,
+            m1=1.2e-14,
+            m2=0.9e-14,
+            base_distance=2.4e-4,
+            delta1=4.0e-5,
+            delta2=6.0e-5,
             interaction_time=1.1,
-            wavepacket_width=0.3,
-            coherence_length=1.4,
+            wavepacket_width=1.8e-5,
+            coherence_length=1.4e-4,
         )
 
         out1 = simulation.oracle(sample)
@@ -36,7 +72,7 @@ class SimulationOracleTests(unittest.TestCase):
         self.assertEqual(len(out1.branch_phases), 4)
         self.assertEqual(len(out1.recombined_probabilities), 4)
         self.assertEqual(len(out1.branch_redshift_factors), 4)
-        self.assertGreater(out1.branch_effective_distances[0], out1.branch_distances[0])
+        self.assertGreaterEqual(out1.branch_effective_distances[0], out1.branch_distances[0])
 
     def test_make_dataset_is_repeatable_and_has_expected_shapes(self):
         ds1 = simulation.make_dataset(num_samples=8, seed=7, regime="train")
@@ -66,26 +102,26 @@ class SimulationOracleTests(unittest.TestCase):
     def test_visibility_improves_with_longer_coherence_length(self):
         low = simulation.oracle(
             simulation.OracleSample(
-                m1=1.1,
-                m2=0.8,
-                base_distance=2.7,
-                delta1=0.7,
-                delta2=0.9,
+                m1=1.1e-14,
+                m2=0.8e-14,
+                base_distance=2.7e-4,
+                delta1=7.0e-5,
+                delta2=9.0e-5,
                 interaction_time=1.3,
-                wavepacket_width=0.35,
-                coherence_length=0.6,
+                wavepacket_width=2.2e-5,
+                coherence_length=3.0e-5,
             )
         )
         high = simulation.oracle(
             simulation.OracleSample(
-                m1=1.1,
-                m2=0.8,
-                base_distance=2.7,
-                delta1=0.7,
-                delta2=0.9,
+                m1=1.1e-14,
+                m2=0.8e-14,
+                base_distance=2.7e-4,
+                delta1=7.0e-5,
+                delta2=9.0e-5,
                 interaction_time=1.3,
-                wavepacket_width=0.35,
-                coherence_length=2.0,
+                wavepacket_width=2.2e-5,
+                coherence_length=2.0e-4,
             )
         )
 

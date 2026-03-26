@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ class FormulaTerm:
         mu = input_row[0] * input_row[1]
         total_mass = input_row[0] + input_row[1]
         wavepacket_width = input_row[6]
-        r_eff = simulation.effective_distance(r, wavepacket_width)
+        r_eff = _candidate_effective_distance(r, wavepacket_width)
         if self.name == "mu/r":
             return mu / r
         if self.name == "mu/r_eff":
@@ -56,7 +57,7 @@ class FormulaTerm:
         mu = input_row[0] * input_row[1]
         total_mass = input_row[0] + input_row[1]
         wavepacket_width = input_row[6]
-        r_eff = simulation.effective_distance(r, wavepacket_width)
+        r_eff = _candidate_effective_distance(r, wavepacket_width)
         if self.name == "mu/r":
             return -mu / (r * r)
         if self.name == "mu/r_eff":
@@ -104,7 +105,7 @@ class CandidateFormula:
             return "V(r) = 0"
         pieces = []
         for coefficient, term in zip(self.coefficients, self.terms):
-            pieces.append(f"{coefficient:+.6f}*{term.name}")
+            pieces.append(f"{coefficient:+.6e}*{term.name}")
         return "V(r) = " + " ".join(pieces)
 
 
@@ -142,6 +143,10 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
+def _candidate_effective_distance(distance: float, wavepacket_width: float) -> float:
+    return math.sqrt(distance * distance + wavepacket_width * wavepacket_width)
+
+
 def _normalized_mse(prediction: list[list[float]], target: list[list[float]]) -> float:
     numerator = 0.0
     denominator = 0.0
@@ -167,6 +172,12 @@ def _design_matrix(dataset: dict[str, object], terms: tuple[FormulaTerm, ...]) -
 
 def _flatten_branch_targets(dataset: dict[str, object]) -> list[float]:
     return [value for row in dataset["branch_potentials"] for value in row]
+
+
+def _rms(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return math.sqrt(sum(value * value for value in values) / len(values))
 
 
 def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
@@ -206,10 +217,19 @@ def fit_formula(
     design = _design_matrix(train_dataset, terms)
     target = _flatten_branch_targets(train_dataset)
     size = len(terms)
+    column_scales = []
+    for column in range(size):
+        column_scales.append(max(_rms([row[column] for row in design]), 1e-30))
+    target_scale = max(_rms(target), 1e-30)
+
+    scaled_design = []
+    for row in design:
+        scaled_design.append([value / scale for value, scale in zip(row, column_scales)])
+    scaled_target = [value / target_scale for value in target]
 
     gram = [[0.0 for _ in range(size)] for _ in range(size)]
     rhs = [0.0 for _ in range(size)]
-    for row, y_value in zip(design, target):
+    for row, y_value in zip(scaled_design, scaled_target):
         for i in range(size):
             rhs[i] += row[i] * y_value
             for j in range(size):
@@ -218,7 +238,11 @@ def fit_formula(
     for i in range(size):
         gram[i][i] += ridge
 
-    coefficients = tuple(_solve_linear_system(gram, rhs))
+    scaled_coefficients = _solve_linear_system(gram, rhs)
+    coefficients = tuple(
+        target_scale * coefficient / scale
+        for coefficient, scale in zip(scaled_coefficients, column_scales)
+    )
     return CandidateFormula(terms=terms, coefficients=coefficients)
 
 
@@ -242,6 +266,7 @@ def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> Pr
             total_mass=total_mass,
             wavepacket_width=wavepacket_width,
             coherence_length=coherence_length,
+            path_separations=(input_row[3], input_row[4]),
         )
         quantum_targets.append(list(quantum.recombined_probabilities) + [quantum.concurrence, quantum.visibility])
 
@@ -256,23 +281,21 @@ def limit_penalty(formula: CandidateFormula) -> float:
         return 1.0
 
     config = simulation.OracleConfig()
-    pn_prefactor = (
-        config.gravitational_constant * config.gravitational_constant
-        / (2.0 * config.speed_of_light * config.speed_of_light)
-    )
     prediction = []
     target = []
-    for m1, m2, distance, sigma in ((1.0, 0.8, 8.0, 0.2), (1.2, 1.0, 12.0, 0.3), (1.4, 1.1, 20.0, 0.4)):
+    for m1, m2, distance, sigma in (
+        (1.2e-14, 1.0e-14, 1.5e-3, 6.0e-6),
+        (2.0e-14, 1.4e-14, 2.4e-3, 8.0e-6),
+        (3.0e-14, 2.4e-14, 3.6e-3, 1.2e-5),
+    ):
         pred_row = []
         target_row = []
-        for offset in (0.0, 2.0, 6.0):
+        for offset in (0.0, 4.0e-4, 8.0e-4):
             mu = m1 * m2
-            total_mass = m1 + m2
             shifted_distance = distance + offset
-            input_row = [m1, m2, shifted_distance, 0.2, 0.2, 1.0, sigma, 1.5]
-            r_eff = simulation.effective_distance(shifted_distance, sigma)
+            input_row = [m1, m2, shifted_distance, 4.0e-5, 4.0e-5, 1.0, sigma, 1.5e-4]
             pred_row.append(formula.predict_branch_potentials(input_row, [shifted_distance])[0])
-            target_row.append(-mu / r_eff - pn_prefactor * mu * total_mass / (r_eff * r_eff))
+            target_row.append(-config.gravitational_constant * mu / shifted_distance)
         prediction.append(pred_row)
         target.append(target_row)
     return _normalized_mse(prediction, target)
