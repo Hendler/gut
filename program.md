@@ -79,6 +79,8 @@ The canonical metric is:
 
 Lower is better.
 
+That score is now measured on held-out validation regimes, not just another sample from the training regime. Improvements should therefore reflect better generalization, not just better in-distribution fitting.
+
 For compatibility with the original notebook and log shape, `train.py` also prints:
 
 - `val_bpb`
@@ -128,6 +130,12 @@ To stay close to upstream `autoresearch`, each run of `train.py` should use a fi
 Within that budget, `train.py` performs repeated formula-search rounds and reports the best result found before time expires.
 
 The outer LLM loop then uses that result to decide what to change next.
+
+The default setup trains on the `train` regime and validates across:
+
+- `heldout_compact`
+- `heldout_decoherent`
+- `heldout_wide`
 
 ## Diagnostics Contract
 

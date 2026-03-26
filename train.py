@@ -5,6 +5,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 import simulation
 
@@ -23,6 +24,8 @@ class SearchConfig:
     limit_weight: float = 0.1
     complexity_weight: float = 0.0
     time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS
+    train_regime: str = "train"
+    validation_regimes: tuple[str, ...] = ("heldout_compact", "heldout_decoherent", "heldout_wide")
     output_dir: str = "results"
 
 
@@ -123,6 +126,8 @@ class ExperimentResult:
     formula_text: str
     plot_path: str
     num_terms: int
+    num_validation_regimes: int
+    validation_summary: str
     search_rounds: int
     duration_seconds: float
 
@@ -292,19 +297,33 @@ def score_formula(
     return unified_score, gravity_error, quantum_error, asymptotic_penalty, complexity
 
 
+def score_formula_across_datasets(
+    formula: CandidateFormula,
+    datasets: Sequence[dict[str, object]],
+    config: SearchConfig,
+) -> tuple[float, float, float, float, float]:
+    totals = [0.0, 0.0, 0.0, 0.0, 0.0]
+    for dataset in datasets:
+        metrics = score_formula(formula, dataset, config)
+        for idx, value in enumerate(metrics):
+            totals[idx] += value
+    count = float(len(datasets))
+    return tuple(value / count for value in totals)
+
+
 def search_best_formula(
     train_dataset: dict[str, object],
-    val_dataset: dict[str, object],
+    val_datasets: Sequence[dict[str, object]],
     config: SearchConfig,
 ) -> tuple[CandidateFormula, tuple[float, float, float, float, float]]:
     best_formula = CandidateFormula(terms=(), coefficients=())
-    best_metrics = score_formula(best_formula, val_dataset, config)
+    best_metrics = score_formula_across_datasets(best_formula, val_datasets, config)
 
     max_terms = min(config.max_terms, len(BASIS_LIBRARY))
     for num_terms in range(1, max_terms + 1):
         for subset in itertools.combinations(BASIS_LIBRARY, num_terms):
             formula = fit_formula(train_dataset, subset, ridge=config.ridge)
-            metrics = score_formula(formula, val_dataset, config)
+            metrics = score_formula_across_datasets(formula, val_datasets, config)
             if metrics[0] < best_metrics[0]:
                 best_formula = formula
                 best_metrics = metrics
@@ -361,6 +380,7 @@ def save_diagnostic_plot(
     dataset: dict[str, object],
     prediction: PredictionBundle,
     formula_text: str,
+    validation_summary: str,
     output_dir: str,
 ) -> str:
     output_path = Path(output_dir)
@@ -380,6 +400,7 @@ def save_diagnostic_plot(
 <rect width="100%" height="100%" fill="#fbf8ef" />
 <text x="30" y="35" font-family="Courier New" font-size="16" fill="#111111">Unified Formula Diagnostics</text>
 <text x="30" y="60" font-family="Courier New" font-size="12" fill="#333333">{formula_text}</text>
+<text x="30" y="78" font-family="Courier New" font-size="11" fill="#444444">{validation_summary}</text>
 <text x="80" y="95" font-family="Courier New" font-size="12" fill="#111111">Mean Potential: Oracle vs Predicted</text>
 <text x="520" y="95" font-family="Courier New" font-size="12" fill="#111111">Visibility: Oracle vs Predicted</text>
 {_svg_scatter_points(potential_points, 40, 110, 360, 250, "#1f77b4")}
@@ -397,34 +418,54 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
     zero_formula = CandidateFormula(terms=(), coefficients=())
     best_formula = zero_formula
     best_metrics = None
-    best_val_dataset = None
+    best_val_datasets = None
     search_rounds = 0
 
     while True:
         round_seed = config.seed + 1000 * search_rounds
-        train_dataset = simulation.make_dataset(config.num_train, seed=round_seed)
-        val_dataset = simulation.make_dataset(config.num_val, seed=round_seed + 1)
+        train_dataset = simulation.make_dataset(
+            config.num_train,
+            seed=round_seed,
+            regime=config.train_regime,
+        )
+        val_datasets = [
+            simulation.make_dataset(
+                config.num_val,
+                seed=round_seed + 1 + 97 * regime_index,
+                regime=regime,
+            )
+            for regime_index, regime in enumerate(config.validation_regimes)
+        ]
 
         if search_rounds == 0:
-            best_metrics = score_formula(zero_formula, val_dataset, config)
-            best_val_dataset = val_dataset
+            best_metrics = score_formula_across_datasets(zero_formula, val_datasets, config)
+            best_val_datasets = val_datasets
 
-        formula, metrics = search_best_formula(train_dataset, val_dataset, config)
+        formula, metrics = search_best_formula(train_dataset, val_datasets, config)
         if best_metrics is None or _is_better_candidate(formula, metrics, best_formula, best_metrics):
             best_formula = formula
             best_metrics = metrics
-            best_val_dataset = val_dataset
+            best_val_datasets = val_datasets
 
         search_rounds += 1
         if search_rounds >= 1 and (time.time() - t0) >= config.time_budget_seconds:
             break
 
-    zero_formula_score = best_metrics[0] if best_formula == zero_formula else score_formula(zero_formula, best_val_dataset, config)[0]
-    prediction = predict_dataset(best_formula, best_val_dataset)
+    zero_formula_score = (
+        best_metrics[0]
+        if best_formula == zero_formula
+        else score_formula_across_datasets(zero_formula, best_val_datasets, config)[0]
+    )
+    reference_dataset = best_val_datasets[0]
+    prediction = predict_dataset(best_formula, reference_dataset)
+    validation_summary = "heldout validation: " + ", ".join(
+        dataset["regime"] for dataset in best_val_datasets
+    )
     plot_path = save_diagnostic_plot(
-        best_val_dataset,
+        reference_dataset,
         prediction,
         best_formula.formula_text(),
+        validation_summary,
         config.output_dir,
     )
 
@@ -440,6 +481,8 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
         formula_text=best_formula.formula_text(),
         plot_path=plot_path,
         num_terms=len(best_formula.terms),
+        num_validation_regimes=len(best_val_datasets),
+        validation_summary=validation_summary,
         search_rounds=search_rounds,
         duration_seconds=time.time() - t0,
     )
@@ -456,6 +499,8 @@ def main() -> None:
     print(f"complexity:       {result.complexity_penalty:.6f}")
     print(f"zero_formula:     {result.zero_formula_score:.6f}")
     print(f"num_terms:        {result.num_terms}")
+    print(f"validation_sets:  {result.num_validation_regimes}")
+    print(f"validation:       {result.validation_summary}")
     print(f"search_rounds:    {result.search_rounds}")
     print(f"time_budget_s:    {DEFAULT_TIME_BUDGET_SECONDS:.2f}")
     print(f"seconds:          {result.duration_seconds:.2f}")

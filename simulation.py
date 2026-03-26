@@ -23,6 +23,7 @@ class OracleConfig:
     hbar: float = 1.0
     speed_of_light: float = 8.0
     min_distance: float = 0.25
+    correlation_strength: float = 0.18
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,57 @@ def effective_distance(distance: float, wavepacket_width: float) -> float:
     return math.sqrt(distance * distance + wavepacket_width * wavepacket_width)
 
 
+def _geometry_correlation_term(
+    sample: OracleSample,
+    distance: float,
+    effective_distance_value: float,
+    config: OracleConfig,
+) -> float:
+    base_scale = max(sample.base_distance * sample.coherence_length, 1e-9)
+    geometry_scale = (sample.delta1 * sample.delta2) / base_scale
+    branch_offset = (distance - sample.base_distance) / max(sample.base_distance, 1e-9)
+    overlap = math.exp(-distance / sample.coherence_length)
+    return (
+        config.correlation_strength
+        * geometry_scale
+        * (1.0 + branch_offset * branch_offset)
+        * overlap
+        / (effective_distance_value * effective_distance_value)
+    )
+
+
+def branch_potential(
+    sample: OracleSample,
+    distance: float,
+    config: OracleConfig | None = None,
+) -> float:
+    config = config or OracleConfig()
+    mu = sample.m1 * sample.m2
+    total_mass = sample.m1 + sample.m2
+    g = config.gravitational_constant
+    c_sq = config.speed_of_light * config.speed_of_light
+    compactness_scale = g * total_mass / (2.0 * c_sq)
+    rho = effective_distance(distance, sample.wavepacket_width)
+    inverse_rho = 1.0 / rho
+    inverse_rho_sq = inverse_rho * inverse_rho
+    correlation_term = _geometry_correlation_term(sample, distance, rho, config)
+    return -g * mu * (inverse_rho + compactness_scale * inverse_rho_sq + correlation_term)
+
+
+def branch_force(
+    sample: OracleSample,
+    distance: float,
+    config: OracleConfig | None = None,
+) -> float:
+    config = config or OracleConfig()
+    step = min(1e-3, 0.02 * max(distance, config.min_distance))
+    left_distance = max(config.min_distance + 1e-4, distance - step)
+    right_distance = distance + step
+    left_potential = branch_potential(sample, left_distance, config)
+    right_potential = branch_potential(sample, right_distance, config)
+    return abs(-(right_potential - left_potential) / (right_distance - left_distance))
+
+
 def quantum_observables_from_branch_dynamics(
     branch_potentials: tuple[float, float, float, float] | list[float],
     branch_forces: tuple[float, float, float, float] | list[float],
@@ -171,23 +223,9 @@ def oracle(sample: OracleSample, config: OracleConfig | None = None) -> OracleOu
         for distance in distances
     )
 
-    mu = sample.m1 * sample.m2
     total_mass = sample.m1 + sample.m2
-    g = config.gravitational_constant
-    c_sq = config.speed_of_light * config.speed_of_light
-    compactness_scale = g * total_mass / (2.0 * c_sq)
-
-    potentials = []
-    forces = []
-    for distance, rho in zip(distances, effective_distances):
-        inverse_rho = 1.0 / rho
-        inverse_rho_sq = inverse_rho * inverse_rho
-        potential = -g * mu * (inverse_rho + compactness_scale * inverse_rho_sq)
-        force = g * mu * distance * (
-            (1.0 / (rho ** 3)) + (2.0 * compactness_scale / (rho ** 4))
-        )
-        potentials.append(potential)
-        forces.append(force)
+    potentials = [branch_potential(sample, distance, config) for distance in distances]
+    forces = [branch_force(sample, distance, config) for distance in distances]
 
     quantum = quantum_observables_from_branch_dynamics(
         potentials,
@@ -220,22 +258,14 @@ def make_dataset(
     num_samples: int,
     seed: int = 0,
     config: OracleConfig | None = None,
+    regime: str = "train",
 ) -> dict[str, object]:
     config = config or OracleConfig()
     rng = random.Random(seed)
 
     samples: list[OracleSample] = []
     while len(samples) < num_samples:
-        sample = OracleSample(
-            m1=rng.uniform(0.5, 2.0),
-            m2=rng.uniform(0.5, 2.0),
-            base_distance=rng.uniform(1.5, 4.5),
-            delta1=rng.uniform(0.2, 1.0),
-            delta2=rng.uniform(0.2, 1.0),
-            interaction_time=rng.uniform(0.3, 1.8),
-            wavepacket_width=rng.uniform(0.1, 0.6),
-            coherence_length=rng.uniform(0.6, 2.5),
-        )
+        sample = _sample_from_regime(rng, regime)
         try:
             _validate_sample(sample, config)
         except ValueError:
@@ -244,6 +274,7 @@ def make_dataset(
 
     outputs = [oracle(sample, config) for sample in samples]
     return {
+        "regime": regime,
         "samples": samples,
         "inputs": [sample.as_input_vector() for sample in samples],
         "branch_distances": [list(out.branch_distances) for out in outputs],
@@ -261,8 +292,56 @@ def make_dataset(
     }
 
 
-def _preview_payload(num_samples: int, seed: int) -> dict[str, object]:
-    dataset = make_dataset(num_samples=num_samples, seed=seed)
+def _sample_from_regime(rng: random.Random, regime: str) -> OracleSample:
+    if regime == "train":
+        return OracleSample(
+            m1=rng.uniform(0.6, 1.8),
+            m2=rng.uniform(0.6, 1.8),
+            base_distance=rng.uniform(2.2, 4.8),
+            delta1=rng.uniform(0.2, 0.9),
+            delta2=rng.uniform(0.2, 0.9),
+            interaction_time=rng.uniform(0.4, 1.6),
+            wavepacket_width=rng.uniform(0.12, 0.45),
+            coherence_length=rng.uniform(1.0, 2.4),
+        )
+    if regime == "heldout_compact":
+        return OracleSample(
+            m1=rng.uniform(1.2, 2.2),
+            m2=rng.uniform(1.1, 2.1),
+            base_distance=rng.uniform(1.1, 2.2),
+            delta1=rng.uniform(0.5, 1.1),
+            delta2=rng.uniform(0.5, 1.1),
+            interaction_time=rng.uniform(0.8, 2.0),
+            wavepacket_width=rng.uniform(0.25, 0.75),
+            coherence_length=rng.uniform(0.8, 1.6),
+        )
+    if regime == "heldout_decoherent":
+        return OracleSample(
+            m1=rng.uniform(0.7, 1.9),
+            m2=rng.uniform(0.7, 1.9),
+            base_distance=rng.uniform(2.0, 4.4),
+            delta1=rng.uniform(0.4, 1.2),
+            delta2=rng.uniform(0.4, 1.2),
+            interaction_time=rng.uniform(1.0, 2.4),
+            wavepacket_width=rng.uniform(0.2, 0.7),
+            coherence_length=rng.uniform(0.25, 0.9),
+        )
+    if regime == "heldout_wide":
+        return OracleSample(
+            m1=rng.uniform(0.5, 1.5),
+            m2=rng.uniform(0.5, 1.5),
+            base_distance=rng.uniform(4.8, 8.0),
+            delta1=rng.uniform(0.15, 0.6),
+            delta2=rng.uniform(0.15, 0.6),
+            interaction_time=rng.uniform(0.3, 1.4),
+            wavepacket_width=rng.uniform(0.08, 0.3),
+            coherence_length=rng.uniform(1.4, 3.4),
+        )
+    raise ValueError(f"Unknown regime: {regime}")
+
+
+def _preview_payload(num_samples: int, seed: int, regime: str) -> dict[str, object]:
+    dataset = make_dataset(num_samples=num_samples, seed=seed, regime=regime)
     first = oracle(dataset["samples"][0])
     return {
         "first_sample": asdict(dataset["samples"][0]),
@@ -281,6 +360,7 @@ def _preview_payload(num_samples: int, seed: int) -> dict[str, object]:
             "visibility": first.visibility,
         },
         "dataset_shapes": {
+            "regime": dataset["regime"],
             "inputs": [len(dataset["inputs"]), len(dataset["inputs"][0])],
             "branch_distances": [len(dataset["branch_distances"]), len(dataset["branch_distances"][0])],
             "branch_effective_distances": [len(dataset["branch_effective_distances"]), len(dataset["branch_effective_distances"][0])],
@@ -296,8 +376,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Preview the fixed quantum-plus-gravity oracle.")
     parser.add_argument("--samples", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--regime", type=str, default="train")
     args = parser.parse_args()
-    print(json.dumps(_preview_payload(num_samples=args.samples, seed=args.seed), indent=2))
+    print(json.dumps(_preview_payload(num_samples=args.samples, seed=args.seed, regime=args.regime), indent=2))
 
 
 if __name__ == "__main__":

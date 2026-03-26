@@ -75,10 +75,10 @@ The branch basis is:
 - `|RL>`
 - `|RR>`
 
-For branch `ab`, the oracle uses a branch-dependent gravitational potential:
+For branch `ab`, the oracle starts from a branch-dependent gravitational potential of the form:
 
 ```text
-U_ab = -G m1 m2 / r_ab
+U_ab ~ -G m1 m2 / r_eff + weak-field corrections + geometry/coherence corrections
 ```
 
 and the corresponding quantum phase:
@@ -96,24 +96,34 @@ The current oracle is harder than the original Newtonian toy. It now includes:
 
 - softened effective distance from finite wavepacket size
 - a weak-field post-Newtonian correction term
+- a geometry/coherence correction that is not in the current search basis
 - quantum visibility loss driven by branch force spread and coherence length
+- explicit held-out validation regimes for generalization
 
 ## Current Baseline
 
-The current baseline search in [train.py](/Users/jonathan.hendler/personal/gut/train.py) recovers the expected shared potential:
+The current baseline search in [train.py](/Users/jonathan.hendler/personal/gut/train.py) now fits on the `train` regime and validates on three held-out regimes:
+
+- `heldout_compact`
+- `heldout_decoherent`
+- `heldout_wide`
+
+With a 5-second smoke-test budget, the best current approximate shared potential is:
 
 ```text
-V(r) = -1.000000*mu/r_eff -0.007813*mu*M/r_eff^2
+V(r) = -0.058137*mu/r -0.945076*mu/r_eff -0.036002*mu/r_eff^3
 ```
 
-with baseline output:
+with output like:
 
 ```text
-unified_score: 0.000000
-val_bpb:       0.000000
-gravity_error: 0.000000
-quantum_error: 0.000000
+unified_score: 0.002258
+val_bpb:       0.002258
+gravity_error: 0.001710
+quantum_error: 0.000547
 ```
+
+That nonzero score is intentional: the oracle is now richer than the current basis, so the search must approximate and generalize instead of recovering the exact hidden law.
 
 Here `val_bpb` is only a compatibility alias for the `autoresearch`-style log format. It does not mean bits per byte in this repo.
 
@@ -148,6 +158,8 @@ TIME_BUDGET_SECONDS=5 python3 train.py
 This prints the main metrics, including how many search rounds fit inside the budget, and writes a diagnostic plot to:
 
 - [results/diagnostics.svg](/Users/jonathan.hendler/personal/gut/results/diagnostics.svg)
+
+The diagnostic plot is drawn from one held-out regime, while the printed `unified_score` averages across all configured held-out validation regimes.
 
 ## How To Use With An LLM In The Loop
 

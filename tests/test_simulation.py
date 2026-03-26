@@ -39,8 +39,8 @@ class SimulationOracleTests(unittest.TestCase):
         self.assertGreater(out1.branch_effective_distances[0], out1.branch_distances[0])
 
     def test_make_dataset_is_repeatable_and_has_expected_shapes(self):
-        ds1 = simulation.make_dataset(num_samples=8, seed=7)
-        ds2 = simulation.make_dataset(num_samples=8, seed=7)
+        ds1 = simulation.make_dataset(num_samples=8, seed=7, regime="train")
+        ds2 = simulation.make_dataset(num_samples=8, seed=7, regime="train")
 
         self.assertEqual(len(ds1["inputs"]), 8)
         self.assertEqual(len(ds1["inputs"][0]), 8)
@@ -61,6 +61,7 @@ class SimulationOracleTests(unittest.TestCase):
         self.assertEqual(ds1["inputs"], ds2["inputs"])
         self.assertEqual(ds1["gravity_targets"], ds2["gravity_targets"])
         self.assertEqual(ds1["quantum_targets"], ds2["quantum_targets"])
+        self.assertEqual(ds1["regime"], "train")
 
     def test_visibility_improves_with_longer_coherence_length(self):
         low = simulation.oracle(
@@ -89,6 +90,21 @@ class SimulationOracleTests(unittest.TestCase):
         )
 
         self.assertLess(low.visibility, high.visibility)
+
+    def test_heldout_regimes_shift_the_input_distribution(self):
+        train_ds = simulation.make_dataset(num_samples=32, seed=13, regime="train")
+        compact_ds = simulation.make_dataset(num_samples=32, seed=13, regime="heldout_compact")
+        decoherent_ds = simulation.make_dataset(num_samples=32, seed=13, regime="heldout_decoherent")
+
+        train_base = sum(row[2] for row in train_ds["inputs"]) / len(train_ds["inputs"])
+        compact_base = sum(row[2] for row in compact_ds["inputs"]) / len(compact_ds["inputs"])
+        train_coherence = sum(row[7] for row in train_ds["inputs"]) / len(train_ds["inputs"])
+        decoherent_coherence = sum(row[7] for row in decoherent_ds["inputs"]) / len(decoherent_ds["inputs"])
+
+        self.assertEqual(compact_ds["regime"], "heldout_compact")
+        self.assertEqual(decoherent_ds["regime"], "heldout_decoherent")
+        self.assertLess(compact_base, train_base)
+        self.assertLess(decoherent_coherence, train_coherence)
 
 
 if __name__ == "__main__":
