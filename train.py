@@ -21,7 +21,7 @@ class SearchConfig:
     gravity_weight: float = 1.0
     quantum_weight: float = 1.0
     limit_weight: float = 0.1
-    complexity_weight: float = 0.001
+    complexity_weight: float = 0.0001
     time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS
     output_dir: str = "results"
 
