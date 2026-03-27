@@ -214,12 +214,15 @@ class CorrectionFormula:
 
 def canonicalize_correction_formula(
     formula: CorrectionFormula,
-    coefficient_tolerance: float = 1e-12,
+    coefficient_tolerance: float = 1e-9,
+    relative_tolerance: float = 1e-6,
 ) -> CorrectionFormula:
+    scale = max((abs(coefficient) for coefficient in formula.coefficients), default=0.0)
+    effective_tolerance = max(coefficient_tolerance, relative_tolerance * scale)
     kept_terms = []
     kept_coefficients = []
     for term, coefficient in zip(formula.terms, formula.coefficients):
-        if abs(coefficient) > coefficient_tolerance:
+        if abs(coefficient) > effective_tolerance:
             kept_terms.append(term)
             kept_coefficients.append(coefficient)
     return CorrectionFormula(
@@ -1013,7 +1016,7 @@ def rank_correction_subsets(
 ) -> list[CorrectionRankingEntry]:
     correction_library = tuple(correction_library or CORRECTION_LIBRARY)
     max_subset_size = min(max_subset_size or len(correction_library), len(correction_library))
-    best_by_signature: dict[tuple[tuple[str, ...], tuple[float, ...]], CorrectionRankingEntry] = {}
+    best_by_signature: dict[str, CorrectionRankingEntry] = {}
 
     for subset_size in range(1, max_subset_size + 1):
         for subset in itertools.combinations(correction_library, subset_size):
@@ -1033,10 +1036,7 @@ def rank_correction_subsets(
                 selected_term_names=tuple(term.name for term in formula.terms),
                 coefficients=formula.coefficient_map(correction_library, key=coefficient_key),
             )
-            signature = (
-                entry.selected_term_names,
-                tuple(round(coefficient, 12) for coefficient in formula.coefficients),
-            )
+            signature = entry.formula_text
             previous = best_by_signature.get(signature)
             if previous is None or (
                 entry.unified_score,
