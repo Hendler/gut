@@ -1,11 +1,50 @@
 import tempfile
 import unittest
+from math import pi
 from pathlib import Path
 
 import train
 
 
 class TrainExperimentTests(unittest.TestCase):
+    def test_correction_recovery_recovers_known_eft_coefficients_in_amplified_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = train.SearchConfig(
+                num_train=160,
+                num_val=96,
+                seed=31,
+                time_budget_seconds=0.01,
+                train_regime="eft_sensitive",
+                validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
+                oracle_config=train.AMPLIFIED_EFT_CONFIG,
+                output_dir=tmpdir,
+            )
+            result = train.run_correction_recovery_experiment(config)
+
+            self.assertLess(result.unified_score, 1e-3)
+            self.assertAlmostEqual(result.coefficients["pn_classical"], 3.0, delta=0.15)
+            self.assertAlmostEqual(result.coefficients["quantum_eft"], 41.0 / (10.0 * pi), delta=0.15)
+            self.assertIn("G*M/(r*c^2)", result.formula_text)
+            self.assertIn("G*hbar/(r^2*c^3)", result.formula_text)
+
+    def test_correction_recovery_suppresses_spurious_terms(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = train.SearchConfig(
+                num_train=160,
+                num_val=96,
+                seed=37,
+                time_budget_seconds=0.01,
+                train_regime="eft_sensitive",
+                validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
+                oracle_config=train.AMPLIFIED_EFT_CONFIG,
+                output_dir=tmpdir,
+            )
+            result = train.run_correction_recovery_experiment(config)
+
+            self.assertAlmostEqual(result.coefficients["smearing_pn_cross"], 0.0, delta=0.1)
+            self.assertAlmostEqual(result.coefficients["sigma_over_r"], 0.0, delta=0.1)
+            self.assertAlmostEqual(result.coefficients["second_order_pn"], 0.0, delta=0.1)
+
     def test_uniqueness_sweep_prefers_scaled_erf_and_recovers_half_scale(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = train.SearchConfig(

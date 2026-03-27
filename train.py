@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import argparse
+import itertools
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
 import simulation
 
 DEFAULT_TIME_BUDGET_SECONDS = float(os.environ.get("TIME_BUDGET_SECONDS", "300"))
+AMPLIFIED_EFT_CONFIG = simulation.OracleConfig(
+    gravitational_constant=1.0,
+    hbar=0.5,
+    speed_of_light=2.0,
+    min_distance=0.05,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class SearchConfig:
     validation_regimes: tuple[str, ...] = ("heldout_compact", "heldout_decoherent", "heldout_wide")
     output_dir: str = "results"
     early_stop_score: float = 5e-5
+    oracle_config: simulation.OracleConfig = field(default_factory=simulation.OracleConfig)
 
 
 @dataclass(frozen=True)
@@ -104,6 +113,139 @@ class ExperimentResult:
     num_terms: int
     num_validation_regimes: int
     validation_summary: str
+    search_rounds: int
+    duration_seconds: float
+
+
+@dataclass(frozen=True)
+class CorrectionTerm:
+    name: str
+    expression: str
+
+    def value(self, input_row: list[float], distance: float, config: simulation.OracleConfig) -> float:
+        total_mass = input_row[0] + input_row[1]
+        sigma = input_row[6]
+        if self.name == "pn_classical":
+            return config.gravitational_constant * total_mass / (
+                distance * config.speed_of_light * config.speed_of_light
+            )
+        if self.name == "quantum_eft":
+            return config.gravitational_constant * config.hbar / (
+                distance * distance * (config.speed_of_light ** 3)
+            )
+        if self.name == "smearing_pn_cross":
+            return config.gravitational_constant * sigma * sigma * total_mass / (
+                (distance ** 3) * config.speed_of_light * config.speed_of_light
+            )
+        if self.name == "sigma_over_r":
+            return sigma / distance
+        if self.name == "second_order_pn":
+            return (
+                config.gravitational_constant
+                * config.gravitational_constant
+                * total_mass
+                * total_mass
+                / ((distance ** 2) * (config.speed_of_light ** 4))
+            )
+        raise KeyError(f"Unknown correction term: {self.name}")
+
+    def derivative(self, input_row: list[float], distance: float, config: simulation.OracleConfig) -> float:
+        total_mass = input_row[0] + input_row[1]
+        sigma = input_row[6]
+        if self.name == "pn_classical":
+            return -config.gravitational_constant * total_mass / (
+                (distance ** 2) * config.speed_of_light * config.speed_of_light
+            )
+        if self.name == "quantum_eft":
+            return -2.0 * config.gravitational_constant * config.hbar / (
+                (distance ** 3) * (config.speed_of_light ** 3)
+            )
+        if self.name == "smearing_pn_cross":
+            return -3.0 * config.gravitational_constant * sigma * sigma * total_mass / (
+                (distance ** 4) * config.speed_of_light * config.speed_of_light
+            )
+        if self.name == "sigma_over_r":
+            return -sigma / (distance ** 2)
+        if self.name == "second_order_pn":
+            return -2.0 * (
+                config.gravitational_constant
+                * config.gravitational_constant
+                * total_mass
+                * total_mass
+                / ((distance ** 3) * (config.speed_of_light ** 4))
+            )
+        raise KeyError(f"Unknown correction term: {self.name}")
+
+
+@dataclass(frozen=True)
+class CorrectionFormula:
+    terms: tuple[CorrectionTerm, ...]
+    coefficients: tuple[float, ...]
+    physics_config: simulation.OracleConfig
+    complexity: float
+    family_name: str = "eft_residual"
+
+    def predict_branch_potentials(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
+        potentials = []
+        g_constant = self.physics_config.gravitational_constant
+        mu = input_row[0] * input_row[1]
+        sigma = max(input_row[6], 1e-30)
+        for distance in branch_distances:
+            smearing = math.erf(distance / (2.0 * sigma))
+            correction = 1.0
+            for coefficient, term in zip(self.coefficients, self.terms):
+                correction += coefficient * term.value(input_row, distance, self.physics_config)
+            potentials.append(-g_constant * mu * smearing * correction / distance)
+        return potentials
+
+    def predict_branch_forces(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
+        forces = []
+        g_constant = self.physics_config.gravitational_constant
+        mu = input_row[0] * input_row[1]
+        sigma = max(input_row[6], 1e-30)
+        for distance in branch_distances:
+            smearing = math.erf(distance / (2.0 * sigma))
+            smearing_derivative = math.exp(-(distance * distance) / (4.0 * sigma * sigma)) / (math.sqrt(math.pi) * sigma)
+            correction = 1.0
+            correction_derivative = 0.0
+            for coefficient, term in zip(self.coefficients, self.terms):
+                correction += coefficient * term.value(input_row, distance, self.physics_config)
+                correction_derivative += coefficient * term.derivative(input_row, distance, self.physics_config)
+            total_derivative = (
+                smearing_derivative * correction / distance
+                + smearing * correction_derivative / distance
+                - smearing * correction / (distance * distance)
+            )
+            forces.append(abs(g_constant * mu * total_derivative))
+        return forces
+
+    def formula_text(self) -> str:
+        if not self.terms:
+            return "V(r) = -G*mu*erf((r/sigma)/2)/r"
+        pieces = []
+        for coefficient, term in zip(self.coefficients, self.terms):
+            pieces.append(f"{coefficient:+.6f}*{term.expression}")
+        return "V(r) = -G*mu*erf((r/sigma)/2)/r * [1 " + " ".join(pieces) + "]"
+
+    def coefficient_map(self) -> dict[str, float]:
+        values = {term.name: 0.0 for term in CORRECTION_LIBRARY}
+        for coefficient, term in zip(self.coefficients, self.terms):
+            values[term.name] = coefficient
+        return values
+
+
+@dataclass(frozen=True)
+class CorrectionRecoveryResult:
+    unified_score: float
+    gravity_error: float
+    quantum_error: float
+    zero_formula_score: float
+    formula_text: str
+    plot_path: str
+    coefficients: dict[str, float]
+    selected_term_names: tuple[str, ...]
+    validation_summary: str
+    num_validation_regimes: int
     search_rounds: int
     duration_seconds: float
 
@@ -271,7 +413,21 @@ def build_monotone_spline_formula(knots: tuple[float, ...], values: tuple[float,
     )
 
 
-def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> PredictionBundle:
+CORRECTION_LIBRARY: tuple[CorrectionTerm, ...] = (
+    CorrectionTerm("pn_classical", "G*M/(r*c^2)"),
+    CorrectionTerm("quantum_eft", "G*hbar/(r^2*c^3)"),
+    CorrectionTerm("smearing_pn_cross", "G*sigma^2*M/(r^3*c^2)"),
+    CorrectionTerm("sigma_over_r", "sigma/r"),
+    CorrectionTerm("second_order_pn", "G^2*M^2/(r^2*c^4)"),
+)
+
+
+def predict_dataset(
+    formula: CandidateFormula | CorrectionFormula,
+    dataset: dict[str, object],
+    physics_config: simulation.OracleConfig | None = None,
+) -> PredictionBundle:
+    physics_config = physics_config or getattr(formula, "physics_config", simulation.OracleConfig())
     gravity_targets = []
     quantum_targets = []
 
@@ -292,6 +448,8 @@ def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> Pr
             wavepacket_width=wavepacket_width,
             coherence_length=coherence_length,
             path_separations=(input_row[3], input_row[4]),
+            hbar=physics_config.hbar,
+            speed_of_light=physics_config.speed_of_light,
         )
         quantum_targets.append(list(quantum.recombined_probabilities) + [quantum.concurrence, quantum.visibility])
 
@@ -328,7 +486,7 @@ def score_formula(
     dataset: dict[str, object],
     config: SearchConfig,
 ) -> tuple[float, float, float, float, float]:
-    prediction = predict_dataset(formula, dataset)
+    prediction = predict_dataset(formula, dataset, config.oracle_config)
     gravity_error = _normalized_mse(prediction.gravity_targets, dataset["gravity_targets"])
     quantum_error = _normalized_mse(prediction.quantum_targets, dataset["quantum_targets"])
     asymptotic_penalty = limit_penalty(formula)
@@ -350,6 +508,56 @@ def score_formula_across_datasets(
     totals = [0.0, 0.0, 0.0, 0.0, 0.0]
     for dataset in datasets:
         metrics = score_formula(formula, dataset, config)
+        for idx, value in enumerate(metrics):
+            totals[idx] += value
+    count = float(len(datasets))
+    return tuple(value / count for value in totals)
+
+
+def correction_limit_penalty(formula: CorrectionFormula, config: SearchConfig) -> float:
+    if not formula.terms:
+        return 0.0
+    samples = (
+        [0.08, 0.07, 6.0, 0.2, 0.2, 1.0, 0.4, 1.5],
+        [0.12, 0.09, 8.0, 0.3, 0.3, 1.0, 0.6, 2.0],
+    )
+    penalties = []
+    for input_row in samples:
+        total = 1.0
+        distance = input_row[2]
+        for coefficient, term in zip(formula.coefficients, formula.terms):
+            total += coefficient * term.value(input_row, distance, config.oracle_config)
+        penalties.append(max(0.0, -total) ** 2)
+    return _mean(penalties)
+
+
+def score_correction_formula(
+    formula: CorrectionFormula,
+    dataset: dict[str, object],
+    config: SearchConfig,
+) -> tuple[float, float, float, float, float]:
+    prediction = predict_dataset(formula, dataset, config.oracle_config)
+    gravity_error = _normalized_mse(prediction.gravity_targets, dataset["gravity_targets"])
+    quantum_error = _normalized_mse(prediction.quantum_targets, dataset["quantum_targets"])
+    asymptotic_penalty = correction_limit_penalty(formula, config)
+    complexity = formula.complexity
+    unified_score = (
+        config.gravity_weight * gravity_error
+        + config.quantum_weight * quantum_error
+        + config.limit_weight * asymptotic_penalty
+        + config.complexity_weight * complexity
+    )
+    return unified_score, gravity_error, quantum_error, asymptotic_penalty, complexity
+
+
+def score_correction_formula_across_datasets(
+    formula: CorrectionFormula,
+    datasets: Sequence[dict[str, object]],
+    config: SearchConfig,
+) -> tuple[float, float, float, float, float]:
+    totals = [0.0, 0.0, 0.0, 0.0, 0.0]
+    for dataset in datasets:
+        metrics = score_correction_formula(formula, dataset, config)
         for idx, value in enumerate(metrics):
             totals[idx] += value
     count = float(len(datasets))
@@ -379,6 +587,94 @@ def _choose_best_formula(
             best_formula = formula
             best_score = score
     return best_formula
+
+
+def _rms(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return math.sqrt(sum(value * value for value in values) / len(values))
+
+
+def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
+    size = len(vector)
+    augmented = [row[:] + [value] for row, value in zip(matrix, vector)]
+
+    for pivot in range(size):
+        max_row = max(range(pivot, size), key=lambda row: abs(augmented[row][pivot]))
+        augmented[pivot], augmented[max_row] = augmented[max_row], augmented[pivot]
+        pivot_value = augmented[pivot][pivot]
+        if abs(pivot_value) < 1e-18:
+            raise ValueError("Singular matrix encountered while solving correction coefficients.")
+
+        scale = 1.0 / pivot_value
+        for column in range(pivot, size + 1):
+            augmented[pivot][column] *= scale
+
+        for row in range(size):
+            if row == pivot:
+                continue
+            factor = augmented[row][pivot]
+            for column in range(pivot, size + 1):
+                augmented[row][column] -= factor * augmented[pivot][column]
+
+    return [augmented[row][-1] for row in range(size)]
+
+
+def _correction_design_matrix(
+    dataset: dict[str, object],
+    terms: tuple[CorrectionTerm, ...],
+    config: SearchConfig,
+) -> list[list[float]]:
+    matrix = []
+    for input_row, distance_row in zip(dataset["inputs"], dataset["branch_distances"]):
+        for distance in distance_row:
+            matrix.append([term.value(input_row, distance, config.oracle_config) for term in terms])
+    return matrix
+
+
+def _flatten_correction_targets(dataset: dict[str, object]) -> list[float]:
+    return [value - 1.0 for row in dataset["branch_total_correction_factors"] for value in row]
+
+
+def fit_correction_formula(
+    train_dataset: dict[str, object],
+    terms: tuple[CorrectionTerm, ...],
+    config: SearchConfig,
+) -> CorrectionFormula:
+    if not terms:
+        return CorrectionFormula(terms=(), coefficients=(), physics_config=config.oracle_config, complexity=1.0)
+
+    design = _correction_design_matrix(train_dataset, terms, config)
+    target = _flatten_correction_targets(train_dataset)
+    size = len(terms)
+    column_scales = [max(_rms([row[column] for row in design]), 1e-18) for column in range(size)]
+    target_scale = max(_rms(target), 1e-18)
+
+    scaled_design = [[value / scale for value, scale in zip(row, column_scales)] for row in design]
+    scaled_target = [value / target_scale for value in target]
+
+    gram = [[0.0 for _ in range(size)] for _ in range(size)]
+    rhs = [0.0 for _ in range(size)]
+    for row, y_value in zip(scaled_design, scaled_target):
+        for i in range(size):
+            rhs[i] += row[i] * y_value
+            for j in range(size):
+                gram[i][j] += row[i] * row[j]
+
+    for i in range(size):
+        gram[i][i] += max(config.ridge, 1e-12)
+
+    scaled_coefficients = _solve_linear_system(gram, rhs)
+    coefficients = tuple(
+        target_scale * coefficient / scale
+        for coefficient, scale in zip(scaled_coefficients, column_scales)
+    )
+    return CorrectionFormula(
+        terms=terms,
+        coefficients=coefficients,
+        physics_config=config.oracle_config,
+        complexity=1.0 + 0.2 * len(terms),
+    )
 
 
 def fit_erf_scaled_family(train_dataset: dict[str, object], config: SearchConfig) -> CandidateFormula:
@@ -482,12 +778,129 @@ def run_uniqueness_sweep_on_datasets(
 
 def run_uniqueness_sweep(config: SearchConfig | None = None) -> list[FamilySweepResult]:
     config = config or SearchConfig()
-    train_dataset = simulation.make_dataset(config.num_train, seed=config.seed, regime=config.train_regime)
+    train_dataset = simulation.make_dataset(
+        config.num_train,
+        seed=config.seed,
+        regime=config.train_regime,
+        config=config.oracle_config,
+    )
     val_datasets = [
-        simulation.make_dataset(config.num_val, seed=config.seed + 1 + 97 * regime_index, regime=regime)
+        simulation.make_dataset(
+            config.num_val,
+            seed=config.seed + 1 + 97 * regime_index,
+            regime=regime,
+            config=config.oracle_config,
+        )
         for regime_index, regime in enumerate(config.validation_regimes)
     ]
     return run_uniqueness_sweep_on_datasets(train_dataset, val_datasets, config)
+
+
+def search_best_correction_formula(
+    train_dataset: dict[str, object],
+    val_datasets: Sequence[dict[str, object]],
+    config: SearchConfig,
+) -> tuple[CorrectionFormula, tuple[float, float, float, float, float]]:
+    best_formula = CorrectionFormula(terms=(), coefficients=(), physics_config=config.oracle_config, complexity=1.0)
+    best_metrics = score_correction_formula_across_datasets(best_formula, val_datasets, config)
+
+    for subset_size in range(1, len(CORRECTION_LIBRARY) + 1):
+        for subset in itertools.combinations(CORRECTION_LIBRARY, subset_size):
+            formula = fit_correction_formula(train_dataset, subset, config)
+            metrics = score_correction_formula_across_datasets(formula, val_datasets, config)
+            if metrics[0] < best_metrics[0] - 1e-15:
+                best_formula = formula
+                best_metrics = metrics
+            elif abs(metrics[0] - best_metrics[0]) <= 1e-15 and formula.complexity < best_formula.complexity:
+                best_formula = formula
+                best_metrics = metrics
+
+    return best_formula, best_metrics
+
+
+def run_correction_recovery_experiment(config: SearchConfig | None = None) -> CorrectionRecoveryResult:
+    config = config or SearchConfig(
+        train_regime="eft_sensitive",
+        validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
+        oracle_config=AMPLIFIED_EFT_CONFIG,
+    )
+    t0 = time.time()
+
+    zero_formula = CorrectionFormula(terms=(), coefficients=(), physics_config=config.oracle_config, complexity=1.0)
+    best_formula = zero_formula
+    best_metrics = None
+    best_val_datasets = None
+    search_rounds = 0
+
+    while True:
+        round_seed = config.seed + 1000 * search_rounds
+        train_dataset = simulation.make_dataset(
+            config.num_train,
+            seed=round_seed,
+            regime=config.train_regime,
+            config=config.oracle_config,
+        )
+        val_datasets = [
+            simulation.make_dataset(
+                config.num_val,
+                seed=round_seed + 1 + 97 * regime_index,
+                regime=regime,
+                config=config.oracle_config,
+            )
+            for regime_index, regime in enumerate(config.validation_regimes)
+        ]
+
+        if search_rounds == 0:
+            best_metrics = score_correction_formula_across_datasets(zero_formula, val_datasets, config)
+            best_val_datasets = val_datasets
+
+        formula, metrics = search_best_correction_formula(train_dataset, val_datasets, config)
+        if best_metrics is None or metrics[0] < best_metrics[0] - 1e-15:
+            best_formula = formula
+            best_metrics = metrics
+            best_val_datasets = val_datasets
+        elif abs(metrics[0] - best_metrics[0]) <= 1e-15 and formula.complexity < best_formula.complexity:
+            best_formula = formula
+            best_metrics = metrics
+            best_val_datasets = val_datasets
+
+        search_rounds += 1
+        elapsed = time.time() - t0
+        if best_metrics is not None and best_metrics[0] <= config.early_stop_score:
+            break
+        if search_rounds >= 1 and elapsed >= config.time_budget_seconds:
+            break
+
+    zero_formula_score = (
+        best_metrics[0]
+        if not best_formula.terms
+        else score_correction_formula_across_datasets(zero_formula, best_val_datasets, config)[0]
+    )
+    reference_dataset = best_val_datasets[0]
+    prediction = predict_dataset(best_formula, reference_dataset, config.oracle_config)
+    validation_summary = "heldout validation: " + ", ".join(dataset["regime"] for dataset in best_val_datasets)
+    plot_path = save_diagnostic_plot(
+        reference_dataset,
+        prediction,
+        best_formula.formula_text(),
+        validation_summary,
+        config.output_dir,
+    )
+    unified_score, gravity_error, quantum_error, _, _ = best_metrics
+    return CorrectionRecoveryResult(
+        unified_score=unified_score,
+        gravity_error=gravity_error,
+        quantum_error=quantum_error,
+        zero_formula_score=zero_formula_score,
+        formula_text=best_formula.formula_text(),
+        plot_path=plot_path,
+        coefficients=best_formula.coefficient_map(),
+        selected_term_names=tuple(term.name for term in best_formula.terms),
+        validation_summary=validation_summary,
+        num_validation_regimes=len(best_val_datasets),
+        search_rounds=search_rounds,
+        duration_seconds=time.time() - t0,
+    )
 
 
 def search_best_formula(
@@ -603,12 +1016,18 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
 
     while True:
         round_seed = config.seed + 1000 * search_rounds
-        train_dataset = simulation.make_dataset(config.num_train, seed=round_seed, regime=config.train_regime)
+        train_dataset = simulation.make_dataset(
+            config.num_train,
+            seed=round_seed,
+            regime=config.train_regime,
+            config=config.oracle_config,
+        )
         val_datasets = [
             simulation.make_dataset(
                 config.num_val,
                 seed=round_seed + 1 + 97 * regime_index,
                 regime=regime,
+                config=config.oracle_config,
             )
             for regime_index, regime in enumerate(config.validation_regimes)
         ]
@@ -636,7 +1055,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
         else score_formula_across_datasets(zero_formula, best_val_datasets, config)[0]
     )
     reference_dataset = best_val_datasets[0]
-    prediction = predict_dataset(best_formula, reference_dataset)
+    prediction = predict_dataset(best_formula, reference_dataset, config.oracle_config)
     validation_summary = "heldout validation: " + ", ".join(dataset["regime"] for dataset in best_val_datasets)
     plot_path = save_diagnostic_plot(
         reference_dataset,
@@ -666,7 +1085,54 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
 
 
 def main() -> None:
-    result = run_experiment()
+    parser = argparse.ArgumentParser(description="Run unified gravity/quantum recovery experiments.")
+    parser.add_argument(
+        "--mode",
+        choices=("smearing", "eft"),
+        default="smearing",
+        help="Choose the original smearing-function search or the amplified EFT correction recovery.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results",
+        help="Directory for diagnostic artifacts such as diagnostics.svg.",
+    )
+    parser.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        default=DEFAULT_TIME_BUDGET_SECONDS,
+        help="Per-run search budget in seconds.",
+    )
+    args = parser.parse_args()
+    base_config = SearchConfig(output_dir=args.output_dir, time_budget_seconds=args.time_budget_seconds)
+
+    if args.mode == "eft":
+        eft_config = SearchConfig(
+            output_dir=args.output_dir,
+            time_budget_seconds=args.time_budget_seconds,
+            train_regime="eft_sensitive",
+            validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
+            oracle_config=AMPLIFIED_EFT_CONFIG,
+        )
+        result = run_correction_recovery_experiment(eft_config)
+        print("---")
+        print(f"unified_score:    {result.unified_score:.6f}")
+        print(f"gravity_error:    {result.gravity_error:.6f}")
+        print(f"quantum_error:    {result.quantum_error:.6f}")
+        print(f"zero_formula:     {result.zero_formula_score:.6f}")
+        print(f"validation_sets:  {result.num_validation_regimes}")
+        print(f"validation:       {result.validation_summary}")
+        print(f"search_rounds:    {result.search_rounds}")
+        print(f"time_budget_s:    {args.time_budget_seconds:.2f}")
+        print(f"seconds:          {result.duration_seconds:.2f}")
+        print(f"plot_path:        {result.plot_path}")
+        print(f"selected_terms:   {', '.join(result.selected_term_names) if result.selected_term_names else '(none)'}")
+        print(f"formula:          {result.formula_text}")
+        for name, value in result.coefficients.items():
+            print(f"coef_{name}:      {value:.6f}")
+        return
+
+    result = run_experiment(base_config)
     print("---")
     print(f"unified_score:    {result.unified_score:.6f}")
     print(f"val_bpb:          {result.val_bpb:.6f}")
@@ -679,7 +1145,7 @@ def main() -> None:
     print(f"validation_sets:  {result.num_validation_regimes}")
     print(f"validation:       {result.validation_summary}")
     print(f"search_rounds:    {result.search_rounds}")
-    print(f"time_budget_s:    {DEFAULT_TIME_BUDGET_SECONDS:.2f}")
+    print(f"time_budget_s:    {args.time_budget_seconds:.2f}")
     print(f"seconds:          {result.duration_seconds:.2f}")
     print(f"plot_path:        {result.plot_path}")
     print(f"formula:          {result.formula_text}")

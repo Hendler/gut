@@ -172,18 +172,36 @@ def branch_potential(
     return -config.gravitational_constant * sample.m1 * sample.m2 * smearing * correction / distance
 
 
-def branch_force(
+def branch_potential_derivative(
     sample: OracleSample,
     distance: float,
     config: OracleConfig | None = None,
 ) -> float:
     config = config or OracleConfig()
-    step = min(1e-6, 0.02 * max(distance, config.min_distance))
-    left_distance = max(config.min_distance + 1e-9, distance - step)
-    right_distance = distance + step
-    left_potential = branch_potential(sample, left_distance, config)
-    right_potential = branch_potential(sample, right_distance, config)
-    return abs(-(right_potential - left_potential) / (right_distance - left_distance))
+    sigma = max(sample.wavepacket_width, 1e-18)
+    g_constant = config.gravitational_constant
+    mu = sample.m1 * sample.m2
+    total_mass = sample.m1 + sample.m2
+    smearing, post_newtonian, quantum_eft = branch_correction_terms(sample, distance, config)
+    smearing_derivative = math.exp(-(distance * distance) / (4.0 * sigma * sigma)) / (math.sqrt(math.pi) * sigma)
+    alpha = 3.0 * g_constant * total_mass / (config.speed_of_light * config.speed_of_light)
+    beta = (41.0 / (10.0 * math.pi)) * g_constant * config.hbar / (config.speed_of_light ** 3)
+    correction = 1.0 + post_newtonian + quantum_eft
+    correction_derivative = -(alpha / (distance * distance)) - (2.0 * beta / (distance ** 3))
+    total_factor_derivative = (
+        smearing_derivative * correction / distance
+        + smearing * correction_derivative / distance
+        - smearing * correction / (distance * distance)
+    )
+    return -g_constant * mu * total_factor_derivative
+
+
+def branch_force(
+    sample: OracleSample,
+    distance: float,
+    config: OracleConfig | None = None,
+) -> float:
+    return abs(-branch_potential_derivative(sample, distance, config))
 
 
 def quantum_observables_from_branch_dynamics(
@@ -373,6 +391,39 @@ def _sample_from_regime(rng: random.Random, regime: str) -> OracleSample:
             interaction_time=rng.uniform(0.1, 2.5),
             wavepacket_width=rng.uniform(3.0e-6, 2.0e-5),
             coherence_length=rng.uniform(8.0e-5, 4.0e-4),
+        )
+    if regime == "eft_sensitive":
+        return OracleSample(
+            m1=rng.uniform(0.02, 0.18),
+            m2=rng.uniform(0.02, 0.18),
+            base_distance=rng.uniform(1.0, 4.0),
+            delta1=rng.uniform(0.1, 0.5),
+            delta2=rng.uniform(0.1, 0.5),
+            interaction_time=rng.uniform(0.5, 3.0),
+            wavepacket_width=rng.uniform(0.15, 0.8),
+            coherence_length=rng.uniform(0.5, 3.0),
+        )
+    if regime == "eft_sensitive_compact":
+        return OracleSample(
+            m1=rng.uniform(0.05, 0.25),
+            m2=rng.uniform(0.05, 0.25),
+            base_distance=rng.uniform(0.7, 1.6),
+            delta1=rng.uniform(0.05, 0.35),
+            delta2=rng.uniform(0.05, 0.35),
+            interaction_time=rng.uniform(0.75, 4.0),
+            wavepacket_width=rng.uniform(0.1, 0.5),
+            coherence_length=rng.uniform(0.5, 2.5),
+        )
+    if regime == "eft_sensitive_wide":
+        return OracleSample(
+            m1=rng.uniform(0.015, 0.1),
+            m2=rng.uniform(0.015, 0.1),
+            base_distance=rng.uniform(3.5, 8.0),
+            delta1=rng.uniform(0.15, 0.7),
+            delta2=rng.uniform(0.15, 0.7),
+            interaction_time=rng.uniform(0.4, 3.5),
+            wavepacket_width=rng.uniform(0.2, 1.0),
+            coherence_length=rng.uniform(0.75, 3.5),
         )
     raise ValueError(f"Unknown regime: {regime}")
 
