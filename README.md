@@ -157,42 +157,50 @@ That means the current oracle is strong enough to distinguish the exact smearing
 
 Here `val_bpb` is only a compatibility alias for the `autoresearch`-style log format. It does not mean bits per byte in this repo.
 
-## Next Experiment
+## Completed: EFT Correction Recovery (Phase 2)
 
-The next meaningful step is not just to make the oracle "harder."
-
-The next meaningful step is to make it harder in a way that carries real physics content:
-
-- keep the recovered smearing law `g(x) = erf(x/2)`
-- enrich the oracle with weak-field EFT corrections
-- then ask whether symbolic search can rediscover those corrections from data
-
-The target correction structure is:
+The oracle now includes the full Donoghue correction structure:
 
 ```text
 V(r) = -G m1 m2 / r * erf(r/(2*sigma)) *
        [1 + 3G(m1+m2)/(r c^2) + (41/(10*pi))*G*hbar/(r^2 c^3)]
 ```
 
-This separates into:
+Phase 2 used an amplified config (G=1, hbar=0.5, c=2) where these corrections are O(0.01-0.1) and recoverable. The search freezes `erf((r/sigma)/2)` as the known smearing law and fits residual correction coefficients via least-squares over a 5-term dimensionally-consistent basis (2 real + 3 spurious).
 
-- Newtonian term
-- post-Newtonian classical GR correction
-- Donoghue quantum-gravity EFT correction
+Result:
 
-The methodological question is:
+```text
+pn_classical  = 3.000000   (exact)
+quantum_eft   = 1.305071   (matches 41/(10*pi))
+spurious terms = 0
+unified_score  = 0.000000
+```
 
-- can automated symbolic search recover the known coefficients `3` and `41/(10*pi)` from simulated weak-field data?
+Run it:
 
-That would not be new physics, but it would be an interesting and honest computational result.
+```bash
+python3 train.py --mode eft --time-budget-seconds 5 --output-dir /tmp/gut-eft
+```
 
-The planned workflow is:
+## Next Experiment: Blind Recovery (Phase 3)
 
-1. Add the post-Newtonian and Donoghue corrections to [simulation.py](/Users/jonathan.hendler/personal/gut/simulation.py).
-2. Freeze the smearing law at `erf((r/sigma)/2)`.
-3. Search only over dimensionally consistent residual correction terms.
-4. Perform a second uniqueness sweep over the correction families.
-5. Check whether the recovered coefficients agree with the known EFT values.
+Phase 2 was not blind — the correction basis was hand-picked with knowledge of the oracle. Phase 3 removes that knowledge.
+
+The plan:
+
+1. Enumerate all dimensionless monomials `G^a * hbar^b * c^d * M^e * r^f * sigma^g` up to second order in the coupling (|a|+|b| <= 2). This yields ~15-30 candidate terms.
+2. Search all subsets up to size 3-4 via exhaustive combinatorial enumeration. With 20 terms and max size 4: 6195 subsets.
+3. Fit coefficients via ridge regression, score on held-out regimes.
+4. Check whether the winning subset is `{GM/(rc^2), G*hbar/(r^2*c^3)}` with coefficients 3.0 and 1.305.
+
+This is where compute goes. The search is combinatorially expensive but embarrassingly parallelizable.
+
+A positive result: the search independently discovers the Donoghue correction structure without being told what to look for.
+
+## Phase 4: Degeneracy Analysis
+
+After Phase 3 identifies the winning subset, test whether alternative subsets of the same size achieve comparable scores. If the margin is large (like erf vs rational in the smearing sweep), the oracle uniquely selects the Donoghue structure. If small, the oracle lacks resolving power and needs enrichment.
 
 ## How To Use Locally
 
@@ -208,27 +216,19 @@ python3 -m unittest discover -s tests -v
 python3 simulation.py --samples 4 --seed 0
 ```
 
-### Run one local evaluation
+### Run the smearing-function search
 
 ```bash
-python3 train.py
+python3 train.py --mode smearing --time-budget-seconds 5 --output-dir /tmp/gut
 ```
 
-By default this now runs a 300-second bounded search, closer to the original `autoresearch` pattern.
-
-For a quick smoke test, use:
+### Run the EFT correction recovery (amplified config)
 
 ```bash
-TIME_BUDGET_SECONDS=5 python3 train.py
+python3 train.py --mode eft --time-budget-seconds 5 --output-dir /tmp/gut-eft
 ```
 
-This prints the main metrics, including how many search rounds fit inside the budget, and writes a diagnostic plot to:
-
-- [results/diagnostics.svg](/Users/jonathan.hendler/personal/gut/results/diagnostics.svg)
-
-The diagnostic plot is drawn from one held-out regime, while the printed `unified_score` averages across all configured held-out validation regimes.
-
-To view the graph in the desktop app, open [results/diagnostics.svg](/Users/jonathan.hendler/personal/gut/results/diagnostics.svg). To inspect run-to-run progress after multiple iterations, use [results.tsv](/Users/jonathan.hendler/personal/gut/results.tsv).
+Both modes print metrics and write a diagnostic SVG to the output directory.
 
 ## How To Use With An LLM In The Loop
 

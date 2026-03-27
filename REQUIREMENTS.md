@@ -185,22 +185,15 @@ The oracle should provide quantum-side outputs such as:
 
 ## Search Strategy Requirements In `train.py`
 
-The search should begin with interpretable formula families.
+The search proceeds hierarchically:
 
-Preferred starting approach:
+1. **Smearing layer** (solved): `g(r/sigma) = erf((r/sigma)/2)`
+2. **Correction layer** (solved with known basis): `h(r) = 1 + Σ c_k f_k` where `f_k` are dimensionally-consistent monomials
+3. **Blind correction layer** (next): same structure, but `f_k` generated programmatically from dimensional analysis without oracle knowledge
 
-- phase 1: search over dimensionless transition functions `g(r/sigma)`
-- phase 2: hold the recovered `g(r/sigma)` fixed
-- phase 3: search over dimensionally consistent correction terms on top of that law
-- explicit formula reporting
-- held-out validation
+Each layer uses explicit formula reporting and held-out validation.
 
-Examples of candidate ingredients:
-
-- dimensionless smearing functions
-- post-Newtonian correction terms
-- EFT correction monomials built from `G`, `hbar`, `c`, masses, and `r`
-- action-inspired or Hamiltonian-inspired parameterizations
+The blind search enumerates dimensionless monomials `G^a * hbar^b * c^d * M^e * r^f * sigma^g` subject to dimensional constraints, then fits coefficients via ridge regression over all subsets up to a maximum size.
 
 ## Optimization Objective
 
@@ -298,85 +291,41 @@ Bulky plots should remain untracked unless there is a specific reason to preserv
 
 ## Research Phases
 
-### Phase 1: Fixed oracle
+### Phase 1: Smearing-function recovery (complete)
 
-Maintain `simulation.py` as the read-only source of truth for the toy system.
+- Searched over dimensionless transition functions `g(r/sigma)`
+- Recovered `erf((r/sigma)/2)` as the unique best law
+- Uniqueness sweep confirmed: erf beats rational, stretched-exponential, and spline families by large margins
 
-### Phase 2: Baseline unified fitter
+### Phase 2: EFT correction recovery with known basis (complete)
 
-Use `train.py` to:
+- Oracle enriched with post-Newtonian and Donoghue corrections
+- Analytic force derivative preserves correction structure
+- Amplified config (G=1, hbar=0.5, c=2) makes corrections resolvable
+- 5-term dimensionally-consistent basis (2 real + 3 spurious)
+- Recovered coefficients: `pn_classical = 3.0`, `quantum_eft = 41/(10*pi)`, spurious = 0
+- CLI: `python3 train.py --mode eft`
 
-- sample from the oracle
-- fit a shared law
-- report `unified_score`
-- report the discovered formula in readable form
+### Phase 3: Blind recovery (next)
 
-### Phase 3: Research-policy refinement
+Remove knowledge of which terms are in the oracle:
 
-Use `program.md` to enforce:
+1. Enumerate all dimensionless monomials in `{G, hbar, c, M, r, sigma}` up to second order in `G` and `hbar`
+2. Exhaustive subset search up to size 3-4 (~6000 subsets for ~20 terms)
+3. Fit coefficients via ridge regression, score on held-out EFT-sensitive regimes
+4. Check whether the search independently discovers `{GM/(rc^2), G*hbar/(r^2*c^3)}` with coefficients 3.0 and 1.305
 
-- read-only oracle
-- mutable `train.py`
-- physically disciplined scoring
-- iterative keep or discard behavior
+A positive result: the Donoghue structure emerges from a blind dimensional-analysis search.
 
-### Phase 4: Autonomous search
+CLI target: `python3 train.py --mode blind`
 
-Let the agent explore:
+### Phase 4: Correction degeneracy analysis (after Phase 3)
 
-- basis libraries
-- regularization and scaling
-- dimensional-analysis filters
-- action or Hamiltonian parameterizations
-- pruning and simplification heuristics
+Apply the same uniqueness methodology used for `g(r/sigma)` to the correction sector:
 
-### Phase 5: Enriched EFT oracle
-
-The next oracle revision should be physically motivated, not arbitrary.
-
-Planned correction structure:
-
-```text
-V(r) =
-  -G m1 m2 / r
-  * erf(r / (2*sigma))
-  * [1 + 3G(m1+m2)/(r c^2) + (41/(10*pi))*G*hbar/(r^2 c^3)]
-```
-
-Interpretation:
-
-1. Newtonian term
-2. classical post-Newtonian correction
-3. leading Donoghue quantum-gravity EFT correction
-
-This is the next oracle worth spending substantial compute on.
-
-### Phase 6: Hierarchical blind recovery
-
-Once the enriched oracle exists, the search should proceed hierarchically:
-
-1. Fix the already recovered smearing law `g(x) = erf(x/2)`.
-2. Search for residual correction families on top of it.
-3. Restrict the search to dimensionally consistent terms.
-4. Fit coefficients without hard-coding the target values.
-5. Measure whether the recovered coefficients approach:
-   - `3`
-   - `41/(10*pi)`
-
-### Phase 7: Correction degeneracy analysis
-
-The same uniqueness question used for `g(r/sigma)` should then be applied to the correction sector.
-
-Key question:
-
-- are the EFT correction terms uniquely recoverable from the oracle, or do multiple correction families score equally well?
-
-If degeneracy appears, the oracle must be enriched further through:
-
-- more held-out regimes
-- shorter-distance probes
-- higher phase sensitivity
-- larger datasets and repeated draws
+- Does the winning subset win by a large margin, or do alternative subsets score comparably?
+- If degenerate: the oracle lacks resolving power and needs enrichment (shorter distances, more regimes, larger datasets)
+- If unique: the oracle selects the Donoghue structure, which is the strongest version of the result
 
 ## Success Criteria
 

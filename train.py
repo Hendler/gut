@@ -121,60 +121,29 @@ class ExperimentResult:
 class CorrectionTerm:
     name: str
     expression: str
+    g_power: int
+    hbar_power: int
+    mass_power: int
+    distance_power: int
+    sigma_power: int
+    c_power: int
 
     def value(self, input_row: list[float], distance: float, config: simulation.OracleConfig) -> float:
         total_mass = input_row[0] + input_row[1]
         sigma = input_row[6]
-        if self.name == "pn_classical":
-            return config.gravitational_constant * total_mass / (
-                distance * config.speed_of_light * config.speed_of_light
-            )
-        if self.name == "quantum_eft":
-            return config.gravitational_constant * config.hbar / (
-                distance * distance * (config.speed_of_light ** 3)
-            )
-        if self.name == "smearing_pn_cross":
-            return config.gravitational_constant * sigma * sigma * total_mass / (
-                (distance ** 3) * config.speed_of_light * config.speed_of_light
-            )
-        if self.name == "sigma_over_r":
-            return sigma / distance
-        if self.name == "second_order_pn":
-            return (
-                config.gravitational_constant
-                * config.gravitational_constant
-                * total_mass
-                * total_mass
-                / ((distance ** 2) * (config.speed_of_light ** 4))
-            )
-        raise KeyError(f"Unknown correction term: {self.name}")
+        return (
+            (config.gravitational_constant ** self.g_power)
+            * (config.hbar ** self.hbar_power)
+            * (total_mass ** self.mass_power)
+            * (distance ** self.distance_power)
+            * (sigma ** self.sigma_power)
+            * (config.speed_of_light ** self.c_power)
+        )
 
     def derivative(self, input_row: list[float], distance: float, config: simulation.OracleConfig) -> float:
-        total_mass = input_row[0] + input_row[1]
-        sigma = input_row[6]
-        if self.name == "pn_classical":
-            return -config.gravitational_constant * total_mass / (
-                (distance ** 2) * config.speed_of_light * config.speed_of_light
-            )
-        if self.name == "quantum_eft":
-            return -2.0 * config.gravitational_constant * config.hbar / (
-                (distance ** 3) * (config.speed_of_light ** 3)
-            )
-        if self.name == "smearing_pn_cross":
-            return -3.0 * config.gravitational_constant * sigma * sigma * total_mass / (
-                (distance ** 4) * config.speed_of_light * config.speed_of_light
-            )
-        if self.name == "sigma_over_r":
-            return -sigma / (distance ** 2)
-        if self.name == "second_order_pn":
-            return -2.0 * (
-                config.gravitational_constant
-                * config.gravitational_constant
-                * total_mass
-                * total_mass
-                / ((distance ** 3) * (config.speed_of_light ** 4))
-            )
-        raise KeyError(f"Unknown correction term: {self.name}")
+        if self.distance_power == 0:
+            return 0.0
+        return self.distance_power * self.value(input_row, distance, config) / distance
 
 
 @dataclass(frozen=True)
@@ -227,10 +196,19 @@ class CorrectionFormula:
             pieces.append(f"{coefficient:+.6f}*{term.expression}")
         return "V(r) = -G*mu*erf((r/sigma)/2)/r * [1 " + " ".join(pieces) + "]"
 
-    def coefficient_map(self) -> dict[str, float]:
-        values = {term.name: 0.0 for term in CORRECTION_LIBRARY}
+    def coefficient_map(
+        self,
+        all_terms: Sequence[CorrectionTerm] | None = None,
+        *,
+        key: str = "name",
+    ) -> dict[str, float]:
+        all_terms = all_terms or CORRECTION_LIBRARY
+        if key not in {"name", "expression"}:
+            raise ValueError(f"Unknown coefficient key mode: {key}")
+        key_fn = (lambda term: term.name) if key == "name" else (lambda term: term.expression)
+        values = {key_fn(term): 0.0 for term in all_terms}
         for coefficient, term in zip(self.coefficients, self.terms):
-            values[term.name] = coefficient
+            values[key_fn(term)] = coefficient
         return values
 
 
@@ -248,6 +226,116 @@ class CorrectionRecoveryResult:
     num_validation_regimes: int
     search_rounds: int
     duration_seconds: float
+
+
+def _power_factor_text(symbol: str, exponent: int) -> str:
+    if exponent == 1:
+        return symbol
+    return f"{symbol}^{exponent}"
+
+
+def _format_dimensionless_term_expression(
+    g_power: int,
+    hbar_power: int,
+    mass_power: int,
+    distance_power: int,
+    sigma_power: int,
+    c_power: int,
+) -> str:
+    numerator = []
+    denominator = []
+    for symbol, exponent in (
+        ("G", g_power),
+        ("hbar", hbar_power),
+        ("M", mass_power),
+        ("sigma", sigma_power),
+        ("r", distance_power),
+        ("c", c_power),
+    ):
+        if exponent > 0:
+            numerator.append(_power_factor_text(symbol, exponent))
+        elif exponent < 0:
+            denominator.append(_power_factor_text(symbol, -exponent))
+
+    numerator_text = "*".join(numerator) if numerator else "1"
+    denominator_text = "*".join(denominator)
+    if not denominator_text:
+        return numerator_text
+    if numerator_text == "1":
+        if "*" in denominator_text:
+            return f"1/({denominator_text})"
+        return f"1/{denominator_text}"
+    if "*" in denominator_text:
+        return f"{numerator_text}/({denominator_text})"
+    return f"{numerator_text}/{denominator_text}"
+
+
+def make_correction_term(
+    name: str,
+    *,
+    g_power: int,
+    hbar_power: int,
+    mass_power: int,
+    distance_power: int,
+    sigma_power: int,
+    c_power: int,
+    expression: str | None = None,
+) -> CorrectionTerm:
+    return CorrectionTerm(
+        name=name,
+        expression=expression
+        or _format_dimensionless_term_expression(
+            g_power,
+            hbar_power,
+            mass_power,
+            distance_power,
+            sigma_power,
+            c_power,
+        ),
+        g_power=g_power,
+        hbar_power=hbar_power,
+        mass_power=mass_power,
+        distance_power=distance_power,
+        sigma_power=sigma_power,
+        c_power=c_power,
+    )
+
+
+def generate_blind_correction_library(
+    max_coupling_order: int = 2,
+    max_sigma_power: int = 4,
+) -> tuple[CorrectionTerm, ...]:
+    terms = []
+    for g_power in range(max_coupling_order + 1):
+        for hbar_power in range(max_coupling_order + 1 - g_power):
+            sigma_start = 1 if g_power == 0 and hbar_power == 0 else 0
+            for sigma_power in range(sigma_start, max_sigma_power + 1):
+                if g_power == 0 and hbar_power == 0 and sigma_power == 0:
+                    continue
+                mass_power = g_power - hbar_power
+                c_power = -(2 * g_power + hbar_power)
+                distance_power = -(g_power + hbar_power + sigma_power)
+                expression = _format_dimensionless_term_expression(
+                    g_power,
+                    hbar_power,
+                    mass_power,
+                    distance_power,
+                    sigma_power,
+                    c_power,
+                )
+                terms.append(
+                    make_correction_term(
+                        expression,
+                        g_power=g_power,
+                        hbar_power=hbar_power,
+                        mass_power=mass_power,
+                        distance_power=distance_power,
+                        sigma_power=sigma_power,
+                        c_power=c_power,
+                        expression=expression,
+                    )
+                )
+    return tuple(terms)
 
 
 def _mean(values: list[float]) -> float:
@@ -414,11 +502,56 @@ def build_monotone_spline_formula(knots: tuple[float, ...], values: tuple[float,
 
 
 CORRECTION_LIBRARY: tuple[CorrectionTerm, ...] = (
-    CorrectionTerm("pn_classical", "G*M/(r*c^2)"),
-    CorrectionTerm("quantum_eft", "G*hbar/(r^2*c^3)"),
-    CorrectionTerm("smearing_pn_cross", "G*sigma^2*M/(r^3*c^2)"),
-    CorrectionTerm("sigma_over_r", "sigma/r"),
-    CorrectionTerm("second_order_pn", "G^2*M^2/(r^2*c^4)"),
+    make_correction_term(
+        "pn_classical",
+        g_power=1,
+        hbar_power=0,
+        mass_power=1,
+        distance_power=-1,
+        sigma_power=0,
+        c_power=-2,
+        expression="G*M/(r*c^2)",
+    ),
+    make_correction_term(
+        "quantum_eft",
+        g_power=1,
+        hbar_power=1,
+        mass_power=0,
+        distance_power=-2,
+        sigma_power=0,
+        c_power=-3,
+        expression="G*hbar/(r^2*c^3)",
+    ),
+    make_correction_term(
+        "smearing_pn_cross",
+        g_power=1,
+        hbar_power=0,
+        mass_power=1,
+        distance_power=-3,
+        sigma_power=2,
+        c_power=-2,
+        expression="G*sigma^2*M/(r^3*c^2)",
+    ),
+    make_correction_term(
+        "sigma_over_r",
+        g_power=0,
+        hbar_power=0,
+        mass_power=0,
+        distance_power=-1,
+        sigma_power=1,
+        c_power=0,
+        expression="sigma/r",
+    ),
+    make_correction_term(
+        "second_order_pn",
+        g_power=2,
+        hbar_power=0,
+        mass_power=2,
+        distance_power=-2,
+        sigma_power=0,
+        c_power=-4,
+        expression="G^2*M^2/(r^2*c^4)",
+    ),
 )
 
 
@@ -800,12 +933,16 @@ def search_best_correction_formula(
     train_dataset: dict[str, object],
     val_datasets: Sequence[dict[str, object]],
     config: SearchConfig,
+    correction_library: Sequence[CorrectionTerm] | None = None,
+    max_subset_size: int | None = None,
 ) -> tuple[CorrectionFormula, tuple[float, float, float, float, float]]:
+    correction_library = tuple(correction_library or CORRECTION_LIBRARY)
+    max_subset_size = min(max_subset_size or len(correction_library), len(correction_library))
     best_formula = CorrectionFormula(terms=(), coefficients=(), physics_config=config.oracle_config, complexity=1.0)
     best_metrics = score_correction_formula_across_datasets(best_formula, val_datasets, config)
 
-    for subset_size in range(1, len(CORRECTION_LIBRARY) + 1):
-        for subset in itertools.combinations(CORRECTION_LIBRARY, subset_size):
+    for subset_size in range(1, max_subset_size + 1):
+        for subset in itertools.combinations(correction_library, subset_size):
             formula = fit_correction_formula(train_dataset, subset, config)
             metrics = score_correction_formula_across_datasets(formula, val_datasets, config)
             if metrics[0] < best_metrics[0] - 1e-15:
@@ -818,7 +955,22 @@ def search_best_correction_formula(
     return best_formula, best_metrics
 
 
-def run_correction_recovery_experiment(config: SearchConfig | None = None) -> CorrectionRecoveryResult:
+def _default_eft_config() -> SearchConfig:
+    return SearchConfig(
+        train_regime="eft_sensitive",
+        validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
+        oracle_config=AMPLIFIED_EFT_CONFIG,
+    )
+
+
+def _run_correction_recovery(
+    config: SearchConfig,
+    correction_library: Sequence[CorrectionTerm],
+    *,
+    max_subset_size: int | None = None,
+    coefficient_key: str = "name",
+) -> CorrectionRecoveryResult:
+    correction_library = tuple(correction_library)
     config = config or SearchConfig(
         train_regime="eft_sensitive",
         validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
@@ -854,7 +1006,13 @@ def run_correction_recovery_experiment(config: SearchConfig | None = None) -> Co
             best_metrics = score_correction_formula_across_datasets(zero_formula, val_datasets, config)
             best_val_datasets = val_datasets
 
-        formula, metrics = search_best_correction_formula(train_dataset, val_datasets, config)
+        formula, metrics = search_best_correction_formula(
+            train_dataset,
+            val_datasets,
+            config,
+            correction_library=correction_library,
+            max_subset_size=max_subset_size,
+        )
         if best_metrics is None or metrics[0] < best_metrics[0] - 1e-15:
             best_formula = formula
             best_metrics = metrics
@@ -894,12 +1052,35 @@ def run_correction_recovery_experiment(config: SearchConfig | None = None) -> Co
         zero_formula_score=zero_formula_score,
         formula_text=best_formula.formula_text(),
         plot_path=plot_path,
-        coefficients=best_formula.coefficient_map(),
+        coefficients=best_formula.coefficient_map(correction_library, key=coefficient_key),
         selected_term_names=tuple(term.name for term in best_formula.terms),
         validation_summary=validation_summary,
         num_validation_regimes=len(best_val_datasets),
         search_rounds=search_rounds,
         duration_seconds=time.time() - t0,
+    )
+
+
+def run_correction_recovery_experiment(config: SearchConfig | None = None) -> CorrectionRecoveryResult:
+    return _run_correction_recovery(config or _default_eft_config(), CORRECTION_LIBRARY)
+
+
+def run_blind_correction_recovery_experiment(
+    config: SearchConfig | None = None,
+    *,
+    max_subset_size: int = 3,
+    max_coupling_order: int = 2,
+    max_sigma_power: int = 4,
+) -> CorrectionRecoveryResult:
+    correction_library = generate_blind_correction_library(
+        max_coupling_order=max_coupling_order,
+        max_sigma_power=max_sigma_power,
+    )
+    return _run_correction_recovery(
+        config or _default_eft_config(),
+        correction_library,
+        max_subset_size=max_subset_size,
+        coefficient_key="expression",
     )
 
 
@@ -1088,9 +1269,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run unified gravity/quantum recovery experiments.")
     parser.add_argument(
         "--mode",
-        choices=("smearing", "eft"),
+        choices=("smearing", "eft", "blind"),
         default="smearing",
-        help="Choose the original smearing-function search or the amplified EFT correction recovery.",
+        help="Choose the original smearing search, the curated EFT recovery, or the blind dimensional EFT search.",
     )
     parser.add_argument(
         "--output-dir",
@@ -1103,10 +1284,28 @@ def main() -> None:
         default=DEFAULT_TIME_BUDGET_SECONDS,
         help="Per-run search budget in seconds.",
     )
+    parser.add_argument(
+        "--max-subset-size",
+        type=int,
+        default=3,
+        help="Maximum subset size for blind correction searches.",
+    )
+    parser.add_argument(
+        "--max-coupling-order",
+        type=int,
+        default=2,
+        help="Maximum total G/hbar coupling order for blind correction enumeration.",
+    )
+    parser.add_argument(
+        "--max-sigma-power",
+        type=int,
+        default=4,
+        help="Maximum sigma power for blind correction enumeration.",
+    )
     args = parser.parse_args()
     base_config = SearchConfig(output_dir=args.output_dir, time_budget_seconds=args.time_budget_seconds)
 
-    if args.mode == "eft":
+    if args.mode in {"eft", "blind"}:
         eft_config = SearchConfig(
             output_dir=args.output_dir,
             time_budget_seconds=args.time_budget_seconds,
@@ -1114,7 +1313,15 @@ def main() -> None:
             validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
             oracle_config=AMPLIFIED_EFT_CONFIG,
         )
-        result = run_correction_recovery_experiment(eft_config)
+        if args.mode == "blind":
+            result = run_blind_correction_recovery_experiment(
+                eft_config,
+                max_subset_size=args.max_subset_size,
+                max_coupling_order=args.max_coupling_order,
+                max_sigma_power=args.max_sigma_power,
+            )
+        else:
+            result = run_correction_recovery_experiment(eft_config)
         print("---")
         print(f"unified_score:    {result.unified_score:.6f}")
         print(f"gravity_error:    {result.gravity_error:.6f}")
@@ -1126,6 +1333,10 @@ def main() -> None:
         print(f"time_budget_s:    {args.time_budget_seconds:.2f}")
         print(f"seconds:          {result.duration_seconds:.2f}")
         print(f"plot_path:        {result.plot_path}")
+        if args.mode == "blind":
+            print(f"max_subset_size:  {args.max_subset_size}")
+            print(f"max_coupling:     {args.max_coupling_order}")
+            print(f"max_sigma_power:  {args.max_sigma_power}")
         print(f"selected_terms:   {', '.join(result.selected_term_names) if result.selected_term_names else '(none)'}")
         print(f"formula:          {result.formula_text}")
         for name, value in result.coefficients.items():
