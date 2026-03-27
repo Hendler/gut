@@ -178,7 +178,7 @@ This removed phantom entries that differed only by numerically negligible coeffi
 
 Within this oracle and search space, the result is:
 
-> Automated symbolic regression uniquely and robustly recovers the Donoghue quantum gravity EFT correction structure from an amplified weak-field oracle.
+> Automated symbolic regression selects and recovers the Donoghue quantum-gravity EFT correction structure as the unique best fit from a 29-term blind search over an amplified weak-field oracle.
 
 What this is:
 
@@ -190,6 +190,13 @@ What this is not:
 - new physics
 - an experimental measurement
 - evidence that the Donoghue correction has been observed in the real world
+
+One asymmetry in the competing fits is worth noting:
+
+- the post-Newtonian term `G*M/(r*c^2)` appears in every top competitor from the 4-term sweep
+- the quantum EFT term `G*hbar/(r^2*c^3)` is the piece that gets replaced by sigma-dependent proxy terms
+
+That is physically sensible. In the amplified config, the PN correction is easier for the fitter to lock onto, while the quantum correction is subtler and can be partially mimicked by nearby `1/r^2`-like sigma-dependent structures. In other words, the quantum correction is the harder target, which is exactly what we would expect.
 
 ## Most Important Takeaway
 
