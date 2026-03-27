@@ -1,14 +1,44 @@
-# Future Work: Theory Discrimination via Automated Symbolic Regression
+# Future Work
 
-## Motivation
+## What We Recovered and What It Means
 
-Phases 1-4 are complete. The blind search robustly recovers the Donoghue EFT correction structure from a 29-term dimensional-analysis search space. The methodology is proven. The oracle is solved.
+The blind search recovers:
 
-The next genuinely interesting result requires changing what the oracle represents.
+```
+V(r) = -G m1 m2 / r * erf(r/(2*sigma)) * [1 + 3G(m1+m2)/(r c^2) + (41/(10*pi))*G*hbar/(r^2 c^3)]
+```
 
-## Proposal: Multi-Oracle Theory Discrimination
+This is the leading-order result of Donoghue's EFT treatment of quantum general relativity. The key context:
 
-Build three oracles encoding competing theories of quantum gravity. Run the same blind search on each. Compare what the search recovers.
+- The Donoghue framework is not a single equation but the systematic treatment of GR as a low-energy effective field theory, organized by powers of `G E^2`.
+- The `3G(m1+m2)/(rc^2)` term is the classical post-Newtonian (Schwarzschild) correction.
+- The `(41/10pi) G hbar/(r^2 c^3)` term is the leading genuine quantum gravity correction — calculable within the EFT without knowing the UV completion.
+- Higher-order operators (`R^2`, `R_{mu nu} R^{mu nu}`, etc.) are suppressed by further powers of `M_Pl` and are not included in our oracle.
+
+What we demonstrated: automated symbolic regression can blindly recover both the classical and quantum corrections from simulated data, with exact coefficients, from a 29-term search space. The recovery is robust across seeds, dataset sizes, and search space enlargement.
+
+What we did not demonstrate: anything beyond what Donoghue computed in 1994. The oracle encodes known physics and the search recovers it.
+
+## Two Directions Forward
+
+### Direction A: Climb the EFT Ladder
+
+The Donoghue framework has a natural hierarchy of corrections. Our oracle currently includes only the leading terms. The next orders include:
+
+- **Two-loop corrections**: additional `G^2` terms with known (partially computed) coefficients
+- **Higher curvature operators**: `R^2` and `R_{mu nu} R^{mu nu}` contributions to the potential
+- **Spin-dependent corrections**: terms that depend on the angular momentum of the masses
+- **Non-analytic (long-range) corrections**: logarithmic terms `log(r)` that arise from infrared physics and are unambiguously calculable
+
+The experiment: enrich the oracle with the next order of Donoghue corrections, expand the blind basis to include the corresponding dimensional monomials (including `log(r/r_0)` terms), and test whether the search can recover the two-loop structure.
+
+This stays within known physics but tests the methodology at a harder level. The two-loop coefficients are partially computed in the literature, so there is a target to check against. The interesting question: at what order does the blind search fail to distinguish the correct terms from spurious alternatives? That failure point tells you the resolving power of this class of oracle.
+
+### Direction B: Theory Discrimination
+
+The Donoghue EFT is not the only candidate framework. Other approaches to quantum gravity make different predictions for the same experimental setup. The EFT framework itself is agnostic about the UV completion — the higher-order operators are left undetermined. Different UV completions (string theory, loop quantum gravity, etc.) would fill in those operators differently.
+
+But even at leading order, there are competing *interpretations* of how gravity and quantum mechanics interact that make structurally different predictions. Build three oracles encoding these alternatives. Run the same blind search on each. Compare what the search recovers.
 
 ### Oracle A: Donoghue EFT (current)
 
@@ -93,9 +123,21 @@ Vary the oracle regimes (masses, distances, interaction times) and measure which
 
 A negative result is still informative: it tells you what this class of experiments cannot do.
 
+## Relationship Between the Two Directions
+
+Direction A stays within the Donoghue EFT and tests whether the methodology scales to harder recovery problems. It produces a methodological result: "automated search can (or cannot) recover N-loop quantum gravity corrections from simulated data."
+
+Direction B steps outside the EFT framework and tests whether different theoretical paradigms produce distinguishable experimental signatures. It produces a physics result: "these theories are (or are not) distinguishable in BMV-class experiments, and the optimal discriminating regime is X."
+
+Direction A is safer (known target coefficients to check against). Direction B is more interesting (answers an open question). Both are tractable with the existing infrastructure.
+
+The strongest combined result would be: recover the Donoghue two-loop corrections (Direction A), then show that the recovered EFT structure is distinguishable from semiclassical and decoherence alternatives (Direction B). That would demonstrate both the depth and breadth of the methodology.
+
 ## References
 
-- Donoghue, J. F., "General relativity as an effective field theory," Phys. Rev. D 50, 3874 (1994)
+- Donoghue, J. F., "General relativity as an effective field theory: The leading quantum corrections," Phys. Rev. D 50, 3874 (1994)
+- Donoghue, J. F., "Introduction to the effective field theory description of gravity," in Advanced School on Effective Theories, Almunecar, Spain (1995). arXiv:gr-qc/9512024
+- Bjerrum-Bohr, N. E. J., Donoghue, J. F., and Holstein, B. R., "Quantum gravitational scattering at the Planckian energy scale," Phys. Rev. D 67, 084033 (2003)
 - Diosi, L., "A universal master equation for the gravitational violation of quantum mechanics," Phys. Lett. A 120, 377 (1987)
 - Penrose, R., "On gravity's role in quantum state reduction," Gen. Rel. Grav. 28, 581 (1996)
 - Bahrami, M. et al., "The Schrodinger-Newton equation and its foundations," New J. Phys. 16, 115007 (2014)
