@@ -6,17 +6,29 @@ import train
 
 
 class TrainExperimentTests(unittest.TestCase):
-    def test_erf_smearing_beats_plummer_surrogate_on_oracle_data(self):
-        dataset = train.simulation.make_dataset(num_samples=24, seed=17, regime="heldout_compact")
-        config = train.SearchConfig(num_train=24, num_val=12, time_budget_seconds=0.01)
+    def test_uniqueness_sweep_prefers_scaled_erf_and_recovers_half_scale(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = train.SearchConfig(
+                num_train=48,
+                num_val=24,
+                seed=17,
+                time_budget_seconds=0.01,
+                output_dir=tmpdir,
+            )
+            sweep = train.run_uniqueness_sweep(config)
+            best = min(sweep, key=lambda row: row.unified_score)
 
-        erf_formula = train.CandidateFormula(smearing=train.SMEARING_LIBRARY["erf"])
-        plummer_formula = train.CandidateFormula(smearing=train.SMEARING_LIBRARY["plummer"])
+            self.assertEqual([row.family_name for row in sweep], [
+                "erf_scaled",
+                "rational_power",
+                "stretched_exponential",
+                "monotone_spline",
+            ])
+            self.assertEqual(best.family_name, "erf_scaled")
+            self.assertAlmostEqual(best.parameters[0], 0.5, delta=0.05)
 
-        erf_score = train.score_formula(erf_formula, dataset, config)[0]
-        plummer_score = train.score_formula(plummer_formula, dataset, config)[0]
-
-        self.assertLess(erf_score, plummer_score)
+            second = sorted(sweep, key=lambda row: row.unified_score)[1]
+            self.assertGreater(second.unified_score - best.unified_score, 1e-3)
 
     def test_run_experiment_respects_small_time_budget_and_records_rounds(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -69,6 +81,20 @@ class TrainExperimentTests(unittest.TestCase):
             self.assertIn("heldout", result.validation_summary.lower())
             self.assertGreaterEqual(result.num_validation_regimes, 2)
             self.assertIn("r/sigma", result.formula_text)
+
+    def test_spline_family_is_available_in_uniqueness_sweep(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = train.SearchConfig(
+                num_train=32,
+                num_val=16,
+                seed=23,
+                time_budget_seconds=0.01,
+                output_dir=tmpdir,
+            )
+            sweep = train.run_uniqueness_sweep(config)
+            family_names = [row.family_name for row in sweep]
+
+            self.assertIn("monotone_spline", family_names)
 
     def test_run_experiment_writes_a_nonempty_plot(self):
         with tempfile.TemporaryDirectory() as tmpdir:
