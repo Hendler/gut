@@ -62,6 +62,10 @@ class QuantumOutputs:
 class OracleOutputs:
     branch_distances: tuple[float, float, float, float]
     branch_effective_distances: tuple[float, float, float, float]
+    branch_smearing_factors: tuple[float, float, float, float]
+    branch_post_newtonian_corrections: tuple[float, float, float, float]
+    branch_quantum_eft_corrections: tuple[float, float, float, float]
+    branch_total_correction_factors: tuple[float, float, float, float]
     branch_potentials: tuple[float, float, float, float]
     branch_forces: tuple[float, float, float, float]
     branch_redshift_factors: tuple[float, float, float, float]
@@ -126,14 +130,46 @@ def effective_distance(distance: float, wavepacket_width: float) -> float:
     return distance / smearing
 
 
+def branch_correction_terms(
+    sample: OracleSample,
+    distance: float,
+    config: OracleConfig | None = None,
+) -> tuple[float, float, float]:
+    config = config or OracleConfig()
+    smearing = _gaussian_smearing_factor(distance, sample.wavepacket_width)
+    post_newtonian = (
+        3.0
+        * config.gravitational_constant
+        * (sample.m1 + sample.m2)
+        / (distance * config.speed_of_light * config.speed_of_light)
+    )
+    quantum_eft = (
+        (41.0 / (10.0 * math.pi))
+        * config.gravitational_constant
+        * config.hbar
+        / (distance * distance * (config.speed_of_light ** 3))
+    )
+    return smearing, post_newtonian, quantum_eft
+
+
+def branch_total_correction_factor(
+    sample: OracleSample,
+    distance: float,
+    config: OracleConfig | None = None,
+) -> float:
+    _, post_newtonian, quantum_eft = branch_correction_terms(sample, distance, config)
+    return 1.0 + post_newtonian + quantum_eft
+
+
 def branch_potential(
     sample: OracleSample,
     distance: float,
     config: OracleConfig | None = None,
 ) -> float:
     config = config or OracleConfig()
-    smearing = _gaussian_smearing_factor(distance, sample.wavepacket_width)
-    return -config.gravitational_constant * sample.m1 * sample.m2 * smearing / distance
+    smearing, post_newtonian, quantum_eft = branch_correction_terms(sample, distance, config)
+    correction = 1.0 + post_newtonian + quantum_eft
+    return -config.gravitational_constant * sample.m1 * sample.m2 * smearing * correction / distance
 
 
 def branch_force(
@@ -142,15 +178,12 @@ def branch_force(
     config: OracleConfig | None = None,
 ) -> float:
     config = config or OracleConfig()
-    g = config.gravitational_constant
-    mu = sample.m1 * sample.m2
-    sigma = max(sample.wavepacket_width, 1e-18)
-    smearing = _gaussian_smearing_factor(distance, sigma)
-    gaussian_tail = math.exp(-(distance * distance) / (4.0 * sigma * sigma))
-    force = g * mu * (
-        smearing / (distance * distance) - gaussian_tail / (math.sqrt(math.pi) * sigma * distance)
-    )
-    return max(0.0, force)
+    step = min(1e-6, 0.02 * max(distance, config.min_distance))
+    left_distance = max(config.min_distance + 1e-9, distance - step)
+    right_distance = distance + step
+    left_potential = branch_potential(sample, left_distance, config)
+    right_potential = branch_potential(sample, right_distance, config)
+    return abs(-(right_potential - left_potential) / (right_distance - left_distance))
 
 
 def quantum_observables_from_branch_dynamics(
@@ -211,6 +244,14 @@ def oracle(sample: OracleSample, config: OracleConfig | None = None) -> OracleOu
         effective_distance(distance, sample.wavepacket_width)
         for distance in distances
     )
+    correction_terms = [branch_correction_terms(sample, distance, config) for distance in distances]
+    smearing_factors = tuple(term[0] for term in correction_terms)
+    post_newtonian_corrections = tuple(term[1] for term in correction_terms)
+    quantum_eft_corrections = tuple(term[2] for term in correction_terms)
+    total_correction_factors = tuple(
+        1.0 + post_newtonian + quantum_eft
+        for _, post_newtonian, quantum_eft in correction_terms
+    )
     potentials = [branch_potential(sample, distance, config) for distance in distances]
     forces = [branch_force(sample, distance, config) for distance in distances]
 
@@ -229,6 +270,10 @@ def oracle(sample: OracleSample, config: OracleConfig | None = None) -> OracleOu
     return OracleOutputs(
         branch_distances=distances,
         branch_effective_distances=effective_distances,
+        branch_smearing_factors=smearing_factors,
+        branch_post_newtonian_corrections=post_newtonian_corrections,
+        branch_quantum_eft_corrections=quantum_eft_corrections,
+        branch_total_correction_factors=total_correction_factors,
         branch_potentials=tuple(potentials),
         branch_forces=tuple(forces),
         branch_redshift_factors=quantum.branch_redshift_factors,
@@ -267,6 +312,10 @@ def make_dataset(
         "inputs": [sample.as_input_vector() for sample in samples],
         "branch_distances": [list(out.branch_distances) for out in outputs],
         "branch_effective_distances": [list(out.branch_effective_distances) for out in outputs],
+        "branch_smearing_factors": [list(out.branch_smearing_factors) for out in outputs],
+        "branch_post_newtonian_corrections": [list(out.branch_post_newtonian_corrections) for out in outputs],
+        "branch_quantum_eft_corrections": [list(out.branch_quantum_eft_corrections) for out in outputs],
+        "branch_total_correction_factors": [list(out.branch_total_correction_factors) for out in outputs],
         "branch_potentials": [list(out.branch_potentials) for out in outputs],
         "branch_forces": [list(out.branch_forces) for out in outputs],
         "gravity_targets": [
@@ -336,6 +385,10 @@ def _preview_payload(num_samples: int, seed: int, regime: str) -> dict[str, obje
         "first_oracle": {
             "branch_distances": list(first.branch_distances),
             "branch_effective_distances": list(first.branch_effective_distances),
+            "branch_smearing_factors": list(first.branch_smearing_factors),
+            "branch_post_newtonian_corrections": list(first.branch_post_newtonian_corrections),
+            "branch_quantum_eft_corrections": list(first.branch_quantum_eft_corrections),
+            "branch_total_correction_factors": list(first.branch_total_correction_factors),
             "branch_potentials": list(first.branch_potentials),
             "branch_forces": list(first.branch_forces),
             "branch_redshift_factors": list(first.branch_redshift_factors),
@@ -352,6 +405,10 @@ def _preview_payload(num_samples: int, seed: int, regime: str) -> dict[str, obje
             "inputs": [len(dataset["inputs"]), len(dataset["inputs"][0])],
             "branch_distances": [len(dataset["branch_distances"]), len(dataset["branch_distances"][0])],
             "branch_effective_distances": [len(dataset["branch_effective_distances"]), len(dataset["branch_effective_distances"][0])],
+            "branch_smearing_factors": [len(dataset["branch_smearing_factors"]), len(dataset["branch_smearing_factors"][0])],
+            "branch_post_newtonian_corrections": [len(dataset["branch_post_newtonian_corrections"]), len(dataset["branch_post_newtonian_corrections"][0])],
+            "branch_quantum_eft_corrections": [len(dataset["branch_quantum_eft_corrections"]), len(dataset["branch_quantum_eft_corrections"][0])],
+            "branch_total_correction_factors": [len(dataset["branch_total_correction_factors"]), len(dataset["branch_total_correction_factors"][0])],
             "branch_potentials": [len(dataset["branch_potentials"]), len(dataset["branch_potentials"][0])],
             "branch_forces": [len(dataset["branch_forces"]), len(dataset["branch_forces"][0])],
             "gravity_targets": [len(dataset["gravity_targets"]), len(dataset["gravity_targets"][0])],

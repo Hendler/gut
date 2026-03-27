@@ -5,6 +5,68 @@ import simulation
 
 
 class SimulationOracleTests(unittest.TestCase):
+    def test_branch_potential_applies_post_newtonian_and_quantum_eft_corrections(self):
+        config = simulation.OracleConfig(
+            gravitational_constant=1.0,
+            hbar=0.5,
+            speed_of_light=2.0,
+            min_distance=1.0e-4,
+        )
+        sample = simulation.OracleSample(
+            m1=2.0,
+            m2=3.0,
+            base_distance=4.0,
+            delta1=0.2,
+            delta2=0.2,
+            interaction_time=1.0,
+            wavepacket_width=0.5,
+            coherence_length=2.0,
+        )
+
+        distance = sample.base_distance
+        smearing, post_newtonian, quantum_eft = simulation.branch_correction_terms(sample, distance, config)
+        potential = simulation.branch_potential(sample, distance, config)
+
+        expected = (
+            -config.gravitational_constant
+            * sample.m1
+            * sample.m2
+            * smearing
+            * (1.0 + post_newtonian + quantum_eft)
+            / distance
+        )
+
+        self.assertAlmostEqual(potential, expected, places=12)
+        self.assertGreater(post_newtonian, 0.0)
+        self.assertGreater(quantum_eft, 0.0)
+
+    def test_oracle_reports_branch_correction_metadata(self):
+        config = simulation.OracleConfig(
+            gravitational_constant=1.0,
+            hbar=0.25,
+            speed_of_light=2.0,
+            min_distance=1.0e-4,
+        )
+        sample = simulation.OracleSample(
+            m1=2.0,
+            m2=1.5,
+            base_distance=3.5,
+            delta1=0.3,
+            delta2=0.4,
+            interaction_time=1.0,
+            wavepacket_width=0.4,
+            coherence_length=2.0,
+        )
+
+        out = simulation.oracle(sample, config)
+
+        self.assertEqual(len(out.branch_smearing_factors), 4)
+        self.assertEqual(len(out.branch_post_newtonian_corrections), 4)
+        self.assertEqual(len(out.branch_quantum_eft_corrections), 4)
+        self.assertEqual(len(out.branch_total_correction_factors), 4)
+        self.assertTrue(all(value > 0.0 for value in out.branch_smearing_factors))
+        self.assertTrue(all(value > 1.0 for value in out.branch_total_correction_factors))
+
     def test_gaussian_smeared_potential_recovers_newtonian_limit_far_away(self):
         sample = simulation.OracleSample(
             m1=1.6e-14,
@@ -84,6 +146,8 @@ class SimulationOracleTests(unittest.TestCase):
         self.assertEqual(len(ds1["branch_distances"][0]), 4)
         self.assertEqual(len(ds1["branch_effective_distances"]), 8)
         self.assertEqual(len(ds1["branch_effective_distances"][0]), 4)
+        self.assertEqual(len(ds1["branch_total_correction_factors"]), 8)
+        self.assertEqual(len(ds1["branch_total_correction_factors"][0]), 4)
         self.assertEqual(len(ds1["branch_potentials"]), 8)
         self.assertEqual(len(ds1["branch_potentials"][0]), 4)
         self.assertEqual(len(ds1["branch_forces"]), 8)

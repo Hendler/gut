@@ -14,6 +14,12 @@ The current oracle world is:
 
 The point is not to claim a true theory of quantum gravity right away. The point is to build an honest search loop for a shared effective formula inside a controlled oracle world.
 
+The project has now reached an important first milestone:
+
+- the search no longer uses a power-law correction soup
+- it searches directly over a dimensionless transition function `g(r/sigma)`
+- and it recovers the oracle truth `erf((r/sigma)/2)` as the best shared law
+
 ## What Is In This Repo
 
 - [simulation.py](/Users/jonathan.hendler/personal/gut/simulation.py): fixed oracle for the weak-field physics model
@@ -103,7 +109,19 @@ The current oracle is more scientific than the original toy. It now includes:
 - a coherence-length overlap factor for readout visibility
 - explicit held-out validation regimes for generalization
 
-The search basis in [train.py](/Users/jonathan.hendler/personal/gut/train.py) is intentionally simpler than the oracle. The hidden law contains the Gaussian `erf(...) / r` structure, while the search basis only has compact surrogate terms such as `mu/r`, `mu/r_eff`, and `mu*sigma^2/r_eff^3`.
+The current search in [train.py](/Users/jonathan.hendler/personal/gut/train.py) is organized around the physically meaningful form:
+
+```text
+V(r) = -G*mu*g(r/sigma)/r
+```
+
+The question is not "which sum of correction terms best fits the data?"
+
+The question is:
+
+- what is the simplest transition function `g(x)`
+- that connects the short-distance smeared regime to the large-distance Newtonian regime
+- while predicting both gravity and quantum observables
 
 ## Current Baseline
 
@@ -113,24 +131,68 @@ The current baseline search in [train.py](/Users/jonathan.hendler/personal/gut/t
 - `heldout_decoherent`
 - `heldout_wide`
 
-With a 5-second smoke-test budget, the current approximate shared potential is:
+With a 5-second smoke-test budget, the recovered shared law is:
 
 ```text
-V(r) = +6.381994e-10*mu/r -7.049074e-10*mu/r_eff -3.617627e-10*mu*sigma^2/r_eff^3
+V(r) = -G*mu*erf((r/sigma)/2)/r
 ```
 
 with output like:
 
 ```text
-unified_score: 0.069894
-val_bpb:       0.069894
+unified_score: 0.000010
+val_bpb:       0.000010
 gravity_error: 0.000000
-quantum_error: 0.069894
+quantum_error: 0.000000
 ```
 
-That nonzero score is intentional: the oracle is richer than the current basis, so the search must approximate and generalize instead of recovering the exact hidden law. In practice, the gravity fit is already very strong, and the remaining miss is mostly on the quantum side where small interaction-energy differences become visible through phase.
+The tiny remaining score is just the asymptotic limit penalty, not a miss on the oracle outputs.
+
+The parameterized uniqueness sweep now also shows that the oracle strongly prefers the Gaussian-smearing answer:
+
+- `erf(a x)` recovers `a = 0.5`
+- rational, stretched-exponential, and spline families score much worse
+
+That means the current oracle is strong enough to distinguish the exact smearing law among the candidate families we tested.
 
 Here `val_bpb` is only a compatibility alias for the `autoresearch`-style log format. It does not mean bits per byte in this repo.
+
+## Next Experiment
+
+The next meaningful step is not just to make the oracle "harder."
+
+The next meaningful step is to make it harder in a way that carries real physics content:
+
+- keep the recovered smearing law `g(x) = erf(x/2)`
+- enrich the oracle with weak-field EFT corrections
+- then ask whether symbolic search can rediscover those corrections from data
+
+The target correction structure is:
+
+```text
+V(r) = -G m1 m2 / r * erf(r/(2*sigma)) *
+       [1 + 3G(m1+m2)/(r c^2) + (41/(10*pi))*G*hbar/(r^2 c^3)]
+```
+
+This separates into:
+
+- Newtonian term
+- post-Newtonian classical GR correction
+- Donoghue quantum-gravity EFT correction
+
+The methodological question is:
+
+- can automated symbolic search recover the known coefficients `3` and `41/(10*pi)` from simulated weak-field data?
+
+That would not be new physics, but it would be an interesting and honest computational result.
+
+The planned workflow is:
+
+1. Add the post-Newtonian and Donoghue corrections to [simulation.py](/Users/jonathan.hendler/personal/gut/simulation.py).
+2. Freeze the smearing law at `erf((r/sigma)/2)`.
+3. Search only over dimensionally consistent residual correction terms.
+4. Perform a second uniqueness sweep over the correction families.
+5. Check whether the recovered coefficients agree with the known EFT values.
 
 ## How To Use Locally
 

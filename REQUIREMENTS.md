@@ -16,6 +16,16 @@ The first real target is:
 - that predicts both output families
 - and generalizes across held-out regimes
 
+This first target has effectively been met for the Gaussian-smearing oracle:
+
+- the search now works in terms of a dimensionless transition function `g(r/sigma)`
+- the oracle truth `erf((r/sigma)/2)` is recovered
+- and the uniqueness sweep strongly prefers that function over the tested alternatives
+
+The next target should therefore be more ambitious and more physically meaningful:
+
+- recover the leading weak-field EFT corrections on top of the known smearing law
+
 ## Core Architectural Decision
 
 We use a separate `simulation.py` as the fixed oracle.
@@ -128,6 +138,12 @@ Current preferred setup:
 - quantum phase accumulation from the branch-dependent interaction energy
 - coherence-limited readout visibility
 
+Near-term enriched setup:
+
+- keep the Gaussian smearing factor fixed
+- add the classical post-Newtonian correction
+- add the leading Donoghue quantum-gravity EFT correction
+
 ### Minimum input parameters
 
 Each sample should include a compact set of physical inputs such as:
@@ -173,17 +189,17 @@ The search should begin with interpretable formula families.
 
 Preferred starting approach:
 
-- low-complexity basis terms
-- learned coefficients
-- sparsity pressure or term pruning
+- phase 1: search over dimensionless transition functions `g(r/sigma)`
+- phase 2: hold the recovered `g(r/sigma)` fixed
+- phase 3: search over dimensionally consistent correction terms on top of that law
 - explicit formula reporting
 - held-out validation
 
 Examples of candidate ingredients:
 
-- inverse-distance terms
-- softened-distance terms
-- low-order rational corrections
+- dimensionless smearing functions
+- post-Newtonian correction terms
+- EFT correction monomials built from `G`, `hbar`, `c`, masses, and `r`
 - action-inspired or Hamiltonian-inspired parameterizations
 
 ## Optimization Objective
@@ -220,6 +236,11 @@ Examples:
 - symmetric inputs should respect particle-exchange symmetry
 - time dependence should enter in a physically interpretable way
 
+For the enriched EFT oracle, formulas should also recover:
+
+- the classical post-Newtonian scaling `G M / (r c^2)`
+- the leading quantum-gravity EFT scaling `G hbar / (r^2 c^3)`
+
 ## Interpretation Requirement
 
 The final artifact is not just a low loss number.
@@ -246,6 +267,10 @@ A later result argues that classical gravity can also generate entanglement in a
 - find the simplest shared law that matches the oracle
 - compare candidate effective theories
 - do not claim that one signature alone settles the ontology of gravity
+
+Second caution:
+
+- recovering the Donoghue coefficients from a simulated oracle would be a methodological validation, not evidence that the corrections have been experimentally measured
 
 ## Results And Git History
 
@@ -305,6 +330,54 @@ Let the agent explore:
 - action or Hamiltonian parameterizations
 - pruning and simplification heuristics
 
+### Phase 5: Enriched EFT oracle
+
+The next oracle revision should be physically motivated, not arbitrary.
+
+Planned correction structure:
+
+```text
+V(r) =
+  -G m1 m2 / r
+  * erf(r / (2*sigma))
+  * [1 + 3G(m1+m2)/(r c^2) + (41/(10*pi))*G*hbar/(r^2 c^3)]
+```
+
+Interpretation:
+
+1. Newtonian term
+2. classical post-Newtonian correction
+3. leading Donoghue quantum-gravity EFT correction
+
+This is the next oracle worth spending substantial compute on.
+
+### Phase 6: Hierarchical blind recovery
+
+Once the enriched oracle exists, the search should proceed hierarchically:
+
+1. Fix the already recovered smearing law `g(x) = erf(x/2)`.
+2. Search for residual correction families on top of it.
+3. Restrict the search to dimensionally consistent terms.
+4. Fit coefficients without hard-coding the target values.
+5. Measure whether the recovered coefficients approach:
+   - `3`
+   - `41/(10*pi)`
+
+### Phase 7: Correction degeneracy analysis
+
+The same uniqueness question used for `g(r/sigma)` should then be applied to the correction sector.
+
+Key question:
+
+- are the EFT correction terms uniquely recoverable from the oracle, or do multiple correction families score equally well?
+
+If degeneracy appears, the oracle must be enriched further through:
+
+- more held-out regimes
+- shorter-distance probes
+- higher phase sensitivity
+- larger datasets and repeated draws
+
 ## Success Criteria
 
 We will consider the setup successful when:
@@ -315,6 +388,12 @@ We will consider the setup successful when:
 - the best run produces a readable shared law, not opaque weights
 - the discovered law improves over a simple baseline on both gravity and quantum targets
 
+For the next stage, success also includes:
+
+- recovery of the correct correction structure on top of the smearing law
+- coefficients close to the known EFT values within oracle precision
+- uniqueness or quantified degeneracy of that recovery
+
 ## Non-Goal Clarification
 
 At this stage, the system is not proving a final theory of quantum gravity.
@@ -322,6 +401,14 @@ At this stage, the system is not proving a final theory of quantum gravity.
 It is doing something narrower and more honest:
 
 - searching for a single compact law that jointly explains both classes of outputs in a controlled oracle world
+
+In the next stage, the most honest headline is:
+
+- "automated symbolic search recovers known weak-field EFT corrections from a simulated oracle"
+
+not:
+
+- "we discovered new quantum gravity physics"
 
 That is the correct first step for using `autoresearch` productively on this problem.
 
