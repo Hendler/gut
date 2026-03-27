@@ -2,24 +2,81 @@
 
 ## Goal
 
-Use the `autoresearch` workflow to search for a single explicit formula that can predict both:
+Use the `autoresearch` workflow to search for a single explicit shared law that predicts both:
 
 - gravity-side outputs from a fixed oracle
 - quantum-side outputs from the same fixed oracle
 
-The target is not an immediate claim of a fundamental theory of quantum gravity. The first target is a shared effective formula that matches both kinds of oracle outputs within a controlled toy model.
+The target is not an immediate claim of a final theory of quantum gravity.
+
+The first real target is:
+
+- a compact shared effective law
+- with correct units and limits
+- that predicts both output families
+- and generalizes across held-out regimes
 
 ## Core Architectural Decision
 
-We will introduce a separate `simulation.py` and treat it as the unchanging oracle.
+We use a separate `simulation.py` as the fixed oracle.
 
 That means:
 
 - `simulation.py` is fixed during autonomous experiments
 - `train.py` is the file the agent changes during the search loop
-- `program.md` is rewritten so the agent understands the new objective and loop
+- `program.md` defines the research policy and evaluation discipline
 
-This follows the core `autoresearch` pattern: keep one fixed evaluation/oracle surface, and let the agent iterate on one main experimental file.
+This follows the core `autoresearch` pattern: keep one fixed evaluation surface, and let the agent iterate on one main experimental file.
+
+## Scientific Direction
+
+The repo should default toward the simplest scientifically grounded unification path first.
+
+Preferred framing:
+
+- weak-field gravity
+- proper time as a physical quantity, not a heuristic feature
+- action-based, Hamiltonian-based, or potential-based shared laws
+- effective-field-theory discipline at low energies
+- dimensional consistency
+- known symmetry and asymptotic constraints
+
+Not preferred as the default starting point:
+
+- string-inspired speculative ansatze
+- extra-dimension oscillation terms
+- topology-first search spaces with no low-energy justification
+
+These ideas are not banned forever. They are just not the default basis family.
+
+## Why This Direction
+
+The most credible route to "one formula for both" is:
+
+- derive gravity observables from a shared interaction law
+- derive quantum observables from the same law through phase evolution
+
+Examples:
+
+- `exp(i S / hbar)`
+- `exp(-i H t / hbar)`
+
+This keeps the search honest. We are not looking for two separate predictors glued together after the fact.
+
+## What The Shared Law Must Be
+
+The search should prefer a single shared mathematical object, ideally one of:
+
+1. an action `S_theta`
+2. a Hamiltonian `H_theta`
+3. a potential `V_theta`
+
+The current code starts with the simplest version, a shared interaction law used for both:
+
+- gravity predictions through potential and force
+- quantum predictions through branch phase
+
+This is the minimum viable unification target.
 
 ## File Roles
 
@@ -29,12 +86,11 @@ This file is the fixed oracle.
 
 Requirements:
 
-- Must be deterministic and seedable.
-- Must be lightweight enough to run many times during experimentation.
-- Must not require external downloads or changing datasets.
-- Must define the toy physical world we are trying to fit.
-- Must expose both gravity and quantum outputs for the same underlying physical setup.
-- Must remain unchanged during the autonomous loop.
+- deterministic and seedable
+- lightweight enough for repeated local experiments
+- no external downloads or changing datasets
+- one shared physical setup that exposes both gravity and quantum outputs
+- unchanged during the autonomous loop
 
 ### `train.py`
 
@@ -42,31 +98,35 @@ This file is the experimental search driver.
 
 Requirements:
 
-- Must import and use `simulation.py`.
-- Must construct candidate third-formula models.
-- Must optimize candidate formulas against oracle outputs.
-- Must print a final scalar score so the `autoresearch` loop can compare runs.
-- Must be the main file mutated by the agent during the search.
+- import and use `simulation.py`
+- construct candidate shared-law models
+- optimize candidates against oracle outputs
+- print a final scalar score
+- remain interpretable enough to report an explicit formula
 
 ### `program.md`
 
-This file becomes the research policy for the agent.
+This file is the research policy for the agent.
 
 Requirements:
 
-- Must instruct the agent that `simulation.py` is read-only.
-- Must instruct the agent that `train.py` is the experimental surface.
-- Must redefine success in terms of a unified physics score, not `val_bpb`.
-- Must preserve the spirit of `autoresearch`: repeated small experiments, keep improvements, discard regressions.
+- tell the agent that `simulation.py` is read-only
+- tell the agent that `train.py` is the experimental surface
+- define success in terms of unified predictive performance and physical validity
+- preserve the repeated-small-experiment spirit of `autoresearch`
 
-## Oracle Design Requirements For `simulation.py`
+## Oracle Requirements For `simulation.py`
 
-The oracle should start with the simplest physically meaningful toy model already identified:
+The oracle should remain the simplest physically meaningful low-energy model we can defend.
+
+Current preferred setup:
 
 - two masses
 - each mass in a two-position spatial superposition
 - weak-field gravity
-- quantum phase accumulation from branch-dependent gravitational interaction
+- Gaussian spatial smearing of the interaction
+- quantum phase accumulation from the branch-dependent interaction energy
+- coherence-limited readout visibility
 
 ### Minimum input parameters
 
@@ -78,60 +138,34 @@ Each sample should include a compact set of physical inputs such as:
 - `delta1`
 - `delta2`
 - `interaction_time`
-
-These inputs should fully define the branch geometry.
+- `wavepacket_width`
+- `coherence_length`
 
 ### Minimum gravity outputs
 
-The oracle should provide gravity-side outputs derived from classical or weak-field formulas, such as:
+The oracle should provide gravity-side outputs such as:
 
-- branch-dependent potential energies
+- branch-dependent interaction energies
 - branch-dependent force magnitudes
 - mean potential energy
 - mean force magnitude
+- force spread
 
 ### Minimum quantum outputs
 
-The oracle should provide quantum-side outputs derived from the same branch geometry, such as:
+The oracle should provide quantum-side outputs such as:
 
 - branch-dependent phases
 - recombined output probabilities
-- an entanglement-related observable such as concurrence
+- concurrence or another entanglement-related observable
+- visibility
 
 ### Practical oracle constraints
 
-- Use only built-in Python plus already-available project dependencies.
-- Prefer CPU-friendly computation.
-- Use numerically stable units or scaled units so optimization is not dominated by tiny SI constants.
-- Provide a simple importable API such as `oracle(sample)` and `make_dataset(num_samples, seed)`.
-- Optionally provide a small CLI for manual inspection.
-
-## What The Third Formula Must Be
-
-The third formula must be a single shared mathematical object that predicts both output families.
-
-The starting version should be:
-
-- a shared potential `V_theta(x)`
-
-From this shared formula:
-
-- gravity predictions are derived from `V_theta(x)` or its spatial derivative
-- quantum predictions are derived from phase accumulation using `V_theta(x)`
-
-This is the simplest credible starting point because it gives one common mathematical core for both sides.
-
-## What We Must Not Do
-
-We should not start with two unrelated black-box models and average their outputs.
-
-Disallowed starting pattern:
-
-- one model only for gravity
-- one separate model only for quantum
-- a thin wrapper that pretends these are unified
-
-That would not satisfy the actual research goal.
+- use built-in Python plus already-available project dependencies unless a deliberate dependency upgrade is approved
+- prefer CPU-friendly computation
+- maintain numerical stability
+- expose a simple importable API such as `oracle(sample)` and `make_dataset(...)`
 
 ## Search Strategy Requirements In `train.py`
 
@@ -141,17 +175,16 @@ Preferred starting approach:
 
 - low-complexity basis terms
 - learned coefficients
-- sparsity pressure or term-pruning
+- sparsity pressure or term pruning
 - explicit formula reporting
+- held-out validation
 
 Examples of candidate ingredients:
 
 - inverse-distance terms
-- polynomial corrections
-- mixed interaction terms
-- low-order rational terms
-
-The output should stay interpretable enough that a discovered candidate can be written as a real formula.
+- softened-distance terms
+- low-order rational corrections
+- action-inspired or Hamiltonian-inspired parameterizations
 
 ## Optimization Objective
 
@@ -161,7 +194,8 @@ Recommended structure:
 
 ```text
 unified_score =
-    gravity_error
+    physical_validity_penalty
+  + gravity_error
   + alpha * quantum_error
   + beta * limit_penalty
   + gamma * complexity_penalty
@@ -169,10 +203,11 @@ unified_score =
 
 Requirements:
 
-- `gravity_error` must measure held-out mismatch on gravity outputs.
-- `quantum_error` must measure held-out mismatch on quantum outputs.
-- `limit_penalty` should reward known limiting behavior.
-- `complexity_penalty` should prefer shorter and cleaner formulas.
+- `gravity_error` must measure held-out mismatch on gravity outputs
+- `quantum_error` must measure held-out mismatch on quantum outputs
+- `physical_validity_penalty` should heavily punish unit mistakes or broken symmetry requirements
+- `limit_penalty` should reward known limiting behavior
+- `complexity_penalty` should prefer shorter and cleaner formulas
 
 ## Known-Limit Requirements
 
@@ -180,55 +215,94 @@ The system should reward formulas that recover expected behavior in simple regim
 
 Examples:
 
-- large-distance behavior should resemble inverse-distance gravity
-- weak-coupling behavior should give small quantum phase shifts
-- symmetry under swapping the two masses should be respected when inputs are symmetric
+- large-distance behavior should approach inverse-distance gravity
+- weak coupling should give small quantum phase shifts
+- symmetric inputs should respect particle-exchange symmetry
+- time dependence should enter in a physically interpretable way
 
 ## Interpretation Requirement
 
-The final artifact we want is not just a low loss number.
+The final artifact is not just a low loss number.
 
 We want:
 
 - an explicit candidate formula
-- its fitted coefficients
-- its validation score
+- fitted coefficients
+- validation score
 - a summary of where it succeeds and fails
 
 If the search uses richer internal parameterizations, it should still distill down to a readable formula whenever possible.
 
+## Research Cautions
+
+The agent should explicitly avoid overclaiming.
+
+Important caution:
+
+- the older BMV-style intuition that gravity-mediated entanglement would straightforwardly prove gravity is quantum is no longer safe as a hard-coded assumption
+
+A later result argues that classical gravity can also generate entanglement in an appropriate QFT treatment of matter. This means the project goal should stay predictive and comparative:
+
+- find the simplest shared law that matches the oracle
+- compare candidate effective theories
+- do not claim that one signature alone settles the ontology of gravity
+
+## Results And Git History
+
+Current situation:
+
+- `results.tsv` is a local untracked working log
+- `results/` is an untracked artifact directory
+
+That is fine for fast iteration, but important conclusions should also be saved in git through a lightweight tracked ledger.
+
+Recommended future addition:
+
+- `experiments.tsv` or `EXPERIMENTS.md`
+
+Each kept run should record:
+
+- date
+- commit
+- score
+- formula
+- keep or discard
+- short note
+
+Bulky plots should remain untracked unless there is a specific reason to preserve one.
+
 ## Research Phases
 
-### Phase 1: Build the fixed oracle
+### Phase 1: Fixed oracle
 
-Deliver `simulation.py` as the read-only source of truth for the toy system.
+Maintain `simulation.py` as the read-only source of truth for the toy system.
 
-### Phase 2: Build a baseline unified fitter
+### Phase 2: Baseline unified fitter
 
-Replace or rewrite `train.py` so it:
+Use `train.py` to:
 
-- samples from the oracle
-- fits a shared formula
-- reports `unified_score`
-- reports the discovered formula in readable form
+- sample from the oracle
+- fit a shared law
+- report `unified_score`
+- report the discovered formula in readable form
 
-### Phase 3: Rewrite `program.md`
+### Phase 3: Research-policy refinement
 
-Update the loop instructions so the agent:
+Use `program.md` to enforce:
 
-- treats `simulation.py` as fixed
-- edits only `train.py`
-- compares runs by `unified_score`
-- logs experimental descriptions in the same iterative spirit as `autoresearch`
+- read-only oracle
+- mutable `train.py`
+- physically disciplined scoring
+- iterative keep or discard behavior
 
-### Phase 4: Start autonomous search
+### Phase 4: Autonomous search
 
 Let the agent explore:
 
 - basis libraries
-- regularization strengths
-- scaling and normalization choices
-- candidate formula parameterizations
+- regularization and scaling
+- dimensional-analysis filters
+- action or Hamiltonian parameterizations
 - pruning and simplification heuristics
 
 ## Success Criteria
@@ -236,17 +310,25 @@ Let the agent explore:
 We will consider the setup successful when:
 
 - `simulation.py` is fixed and trustworthy as an oracle
-- `train.py` can run end-to-end and report a stable `unified_score`
-- the loop can compare experiments automatically
-- the best run produces a readable shared formula, not just opaque weights
-- the discovered formula improves over a simple baseline on both gravity and quantum targets
+- `train.py` runs end to end and reports a stable `unified_score`
+- the loop compares experiments automatically
+- the best run produces a readable shared law, not opaque weights
+- the discovered law improves over a simple baseline on both gravity and quantum targets
 
 ## Non-Goal Clarification
 
-At this stage, the system is not proving a true theory of quantum gravity.
+At this stage, the system is not proving a final theory of quantum gravity.
 
 It is doing something narrower and more honest:
 
-- searching for a single compact formula that jointly explains both classes of outputs in a controlled oracle world
+- searching for a single compact law that jointly explains both classes of outputs in a controlled oracle world
 
 That is the correct first step for using `autoresearch` productively on this problem.
+
+## References
+
+- Donoghue, J. F., “General relativity as an effective field theory: The leading quantum corrections,” *Physical Review D* 50, 3874-3888 (1994). DOI: [10.1103/PhysRevD.50.3874](https://doi.org/10.1103/PhysRevD.50.3874)
+- Zych, M., Costa, F., Pikovski, I., and Brukner, C., “Quantum interferometric visibility as a witness of general relativistic proper time,” *Nature Communications* 2, 505 (2011). DOI: [10.1038/ncomms1498](https://doi.org/10.1038/ncomms1498)
+- Bose, S. et al., “Spin Entanglement Witness for Quantum Gravity,” *Physical Review Letters* 119, 240401 (2017). DOI: [10.1103/PhysRevLett.119.240401](https://doi.org/10.1103/PhysRevLett.119.240401)
+- Marletto, C. and Vedral, V., “Gravitationally Induced Entanglement between Two Massive Particles Is Sufficient Evidence of Quantum Effects in Gravity,” *Physical Review Letters* 119, 240402 (2017). DOI: [10.1103/PhysRevLett.119.240402](https://doi.org/10.1103/PhysRevLett.119.240402)
+- Aziz, J. and Howl, R., “Classical theories of gravity produce entanglement,” *Nature* 646, 49-53 (published October 22, 2025). DOI: [10.1038/s41586-025-09595-7](https://doi.org/10.1038/s41586-025-09595-7)

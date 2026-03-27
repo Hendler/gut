@@ -1,11 +1,52 @@
 # autoresearch program for unified quantum-plus-gravity formula search
 
-This repo is designed to mimic the structure of `karpathy/autoresearch`, but for symbolic physics search instead of language-model pretraining.
+This repo is an `autoresearch`-style environment for symbolic physics search rather than language-model pretraining.
 
-The target is a single compact formula that predicts both:
+The target is not "find any low-loss expression."
 
-- gravity-side outputs from a fixed oracle
-- quantum-side outputs from the same fixed oracle
+The target is:
+
+- one compact shared physical law
+- that predicts gravity-side observables
+- and quantum-side observables
+- from the same underlying mathematical object
+
+## Scientific Stance
+
+Bias toward the simplest physically grounded search space first.
+
+Do not begin from speculative frameworks such as:
+
+- extra dimensions
+- string-inspired oscillatory terms
+- topology-first ansatze with no low-energy justification
+
+Those ideas are not forbidden forever, but they are not the default starting point.
+
+The default starting point should be:
+
+- weak-field gravity
+- proper time or action-based phase evolution
+- effective-field-theory discipline
+- symmetry, units, and limiting-behavior constraints
+
+## Shared Object To Search For
+
+Prefer a shared:
+
+- action `S_theta`
+- Hamiltonian `H_theta`
+- or interaction potential `V_theta`
+
+in that order of scientific priority.
+
+Why:
+
+- gravity observables can be derived from a shared interaction law
+- quantum observables can be derived from phase evolution `exp(i S / hbar)` or `exp(-i H t / hbar)`
+- this is a genuine unification target, not two separate predictors glued together
+
+Time should be treated as physically meaningful proper-time evolution or invariant-duration input, not as an arbitrary feature hack.
 
 ## Two Layers
 
@@ -17,11 +58,11 @@ The inner loop runs entirely on your machine with no API calls:
 
 - `simulation.py` is the fixed oracle
 - `train.py` evaluates one candidate search strategy against that oracle
-- tests validate the oracle contract and experiment contract
+- tests validate the oracle and experiment contracts
 
 ### Outer loop: LLM researcher
 
-The outer loop is the part that makes this truly `autoresearch`-like:
+The outer loop makes this `autoresearch`-like:
 
 - an LLM reads the repo instructions
 - edits `train.py`
@@ -31,13 +72,7 @@ The outer loop is the part that makes this truly `autoresearch`-like:
 - keeps or discards the change
 - repeats on a fixed cadence
 
-If you want unattended autonomous iteration, this outer loop requires LLM access. That can come from:
-
-- an interactive Codex session like this one
-- another coding agent
-- an API-backed agent runner
-
-The repo itself does not need an API key. The autonomous researcher does.
+If you want unattended autonomous iteration, this outer loop requires LLM access.
 
 ## Files To Read First
 
@@ -79,13 +114,36 @@ The canonical metric is:
 
 Lower is better.
 
-That score is now measured on held-out validation regimes, not just another sample from the training regime. Improvements should therefore reflect better generalization, not just better in-distribution fitting.
+That score should reflect four priorities, in this order:
 
-For compatibility with the original notebook and log shape, `train.py` also prints:
+1. physical validity
+2. held-out predictive accuracy
+3. correct asymptotic limits
+4. simplicity
+
+For compatibility with the original notebook and log shape, `train.py` may also print:
 
 - `val_bpb`
 
 In this repo, `val_bpb` is only a compatibility alias for `unified_score`.
+
+## What The Score Should Reward
+
+The search should favor candidates that satisfy all of the following:
+
+- one shared law predicts both output families
+- dimensional consistency is respected
+- symmetry under particle exchange is respected when appropriate
+- weak-field / large-distance limits reduce to known behavior
+- quantum evolution follows from the same law through phase accumulation
+- performance holds on held-out regimes, not only in-distribution samples
+
+The score should penalize:
+
+- unit-inconsistent formulas
+- formulas that violate known low-energy limits
+- formulas that only fit one side well
+- unnecessary complexity
 
 ## Test Gate
 
@@ -105,7 +163,7 @@ Run one local evaluation with:
 python3 train.py > run.log 2>&1
 ```
 
-By default, `train.py` uses a 300-second time budget. For a shorter smoke test, override it like this:
+By default, `train.py` uses a 300-second time budget. For a shorter smoke test:
 
 ```bash
 TIME_BUDGET_SECONDS=5 python3 train.py > run.log 2>&1
@@ -117,7 +175,7 @@ Then inspect:
 grep "^unified_score:\|^val_bpb:\|^formula:" run.log
 ```
 
-If that fails, inspect:
+If that fails:
 
 ```bash
 tail -n 50 run.log
@@ -131,11 +189,37 @@ Within that budget, `train.py` performs repeated formula-search rounds and repor
 
 The outer LLM loop then uses that result to decide what to change next.
 
-The default setup trains on the `train` regime and validates across:
+The current default setup trains on the `train` regime and validates across:
 
 - `heldout_compact`
 - `heldout_decoherent`
 - `heldout_wide`
+
+## What To Explore In `train.py`
+
+Useful directions include:
+
+- richer shared-law basis libraries
+- action-first or Hamiltonian-first parameterizations
+- dimensional-analysis filtering
+- sparsity and pruning heuristics
+- better low-energy limit penalties
+- symmetry constraints
+- score weighting between gravity and quantum outputs
+- dataset curricula and harder held-out cases
+- formula distillation and reporting
+
+## What Not To Do
+
+Do not split the task into two unrelated black-box models and average them afterward.
+
+Do not hard-code speculative theories as the default basis without low-energy motivation.
+
+Do not assume that observing entanglement in a model automatically proves that gravity is quantum.
+
+Do not modify `simulation.py` during the autonomous loop. If the oracle changes, scores stop being comparable.
+
+Do not skip the tests.
 
 ## Diagnostics Contract
 
@@ -147,54 +231,50 @@ Removing diagnostics without replacing them with something equally useful is a r
 
 ## Results Logging
 
-Use `results.tsv` as an untracked local log. Keep the original 5-column schema:
+There are two result layers.
 
-```text
-commit	val_bpb	memory_gb	status	description
-```
+### Local untracked artifacts
 
-Interpretation here:
+Keep these untracked:
 
-1. `commit`: short git hash
-2. `val_bpb`: the unified score
-3. `memory_gb`: use `0.0` for now unless memory tracking is added later
-4. `status`: `keep`, `discard`, or `crash`
-5. `description`: short description of the experiment
+- `results/`
+- `results.tsv`
+
+These are convenient working artifacts.
+
+### Git-tracked research history
+
+Important experiment conclusions should also be written to a git-tracked lightweight ledger.
+
+Recommended future file:
+
+- `experiments.tsv` or `EXPERIMENTS.md`
+
+Each kept run should record:
+
+- date
+- commit
+- score
+- formula
+- keep or discard
+- short description
+
+Do not commit bulky plots by default.
 
 ## Experiment Loop
 
-Once setup is complete, the outer LLM loop should do this forever:
+Once setup is complete, the outer LLM loop should do this:
 
 1. Confirm the repo is clean and committed.
 2. Record the current baseline if it has not been logged yet.
 3. Modify only `train.py`.
 4. Run the test suite.
-5. Commit the experimental change.
-6. Run `python3 train.py > run.log 2>&1`.
-7. Extract the score and formula from the log.
-8. Log the result in `results.tsv`.
-9. If the score improves, keep the commit.
-10. If the score is equal or worse, revert to the previous best commit.
-
-## What To Explore In `train.py`
-
-Useful directions include:
-
-- richer basis libraries
-- sparsity and pruning heuristics
-- tie-breaking by simplicity
-- better limit penalties
-- score weighting between gravity and quantum outputs
-- dataset curricula and harder held-out cases
-- formula distillation and reporting
-
-## What Not To Do
-
-Do not split the task into two unrelated black-box models and average them afterward. That does not satisfy the actual goal.
-
-Do not modify `simulation.py` during the autonomous loop. If the oracle changes, scores stop being comparable.
-
-Do not skip the tests.
+5. Run `python3 train.py > run.log 2>&1`.
+6. Extract the score and formula from the log.
+7. Log the result in local `results.tsv`.
+8. If the run is scientifically meaningful, also summarize it in the git-tracked experiment ledger.
+9. If the score improves, keep the change.
+10. If the score is equal or worse, discard the change.
 
 ## First Baseline Rule
 
