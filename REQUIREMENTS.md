@@ -256,9 +256,9 @@ Current situation:
 
 That is fine for fast iteration, but important conclusions should also be saved in git through a lightweight tracked ledger.
 
-Recommended future addition:
+Git-tracked ledger:
 
-- `experiments.tsv` or `EXPERIMENTS.md`
+- `EXPERIMENTS.md`
 
 Each kept run should record:
 

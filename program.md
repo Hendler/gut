@@ -246,9 +246,9 @@ These are convenient working artifacts.
 
 Important experiment conclusions should also be written to a git-tracked lightweight ledger.
 
-Recommended future file:
+Git-tracked ledger:
 
-- `experiments.tsv` or `EXPERIMENTS.md`
+- `EXPERIMENTS.md`
 
 Each kept run should record:
 
