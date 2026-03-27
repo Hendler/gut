@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import itertools
 import math
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import simulation
 
@@ -18,95 +17,70 @@ class SearchConfig:
     num_train: int = 256
     num_val: int = 128
     seed: int = 42
-    max_terms: int = 3
-    ridge: float = 1e-8
+    max_terms: int = 1
+    ridge: float = 0.0
     gravity_weight: float = 1.0
     quantum_weight: float = 1.0
-    limit_weight: float = 0.1
+    limit_weight: float = 0.05
     complexity_weight: float = 0.0
     time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS
     train_regime: str = "train"
     validation_regimes: tuple[str, ...] = ("heldout_compact", "heldout_decoherent", "heldout_wide")
     output_dir: str = "results"
+    early_stop_score: float = 1e-12
 
 
 @dataclass(frozen=True)
-class FormulaTerm:
+class SmearingFunction:
     name: str
+    expression: str
+    evaluator: Callable[[float], float]
+    derivative_evaluator: Callable[[float], float]
+    complexity: float = 1.0
 
-    def value(self, input_row: list[float], r: float) -> float:
-        mu = input_row[0] * input_row[1]
-        total_mass = input_row[0] + input_row[1]
-        wavepacket_width = input_row[6]
-        r_eff = _candidate_effective_distance(r, wavepacket_width)
-        if self.name == "mu/r":
-            return mu / r
-        if self.name == "mu/r_eff":
-            return mu / r_eff
-        if self.name == "mu/r_eff^2":
-            return mu / (r_eff * r_eff)
-        if self.name == "mu/r_eff^3":
-            return mu / (r_eff * r_eff * r_eff)
-        if self.name == "mu*M/r_eff^2":
-            return mu * total_mass / (r_eff * r_eff)
-        if self.name == "mu*sigma^2/r_eff^3":
-            return mu * wavepacket_width * wavepacket_width / (r_eff * r_eff * r_eff)
-        raise KeyError(f"Unknown basis term: {self.name}")
+    def value(self, x: float) -> float:
+        return self.evaluator(x)
 
-    def derivative(self, input_row: list[float], r: float) -> float:
-        mu = input_row[0] * input_row[1]
-        total_mass = input_row[0] + input_row[1]
-        wavepacket_width = input_row[6]
-        r_eff = _candidate_effective_distance(r, wavepacket_width)
-        if self.name == "mu/r":
-            return -mu / (r * r)
-        if self.name == "mu/r_eff":
-            return -mu * r / (r_eff ** 3)
-        if self.name == "mu/r_eff^2":
-            return -2.0 * mu * r / (r_eff ** 4)
-        if self.name == "mu/r_eff^3":
-            return -3.0 * mu * r / (r_eff ** 5)
-        if self.name == "mu*M/r_eff^2":
-            return -2.0 * mu * total_mass * r / (r_eff ** 4)
-        if self.name == "mu*sigma^2/r_eff^3":
-            return -3.0 * mu * wavepacket_width * wavepacket_width * r / (r_eff ** 5)
-        raise KeyError(f"Unknown basis term: {self.name}")
+    def derivative(self, x: float) -> float:
+        return self.derivative_evaluator(x)
 
 
 @dataclass(frozen=True)
 class CandidateFormula:
-    terms: tuple[FormulaTerm, ...]
-    coefficients: tuple[float, ...]
+    smearing: SmearingFunction | None
 
     def predict_branch_potentials(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
-        if not self.terms:
+        if self.smearing is None:
             return [0.0 for _ in branch_distances]
+        g_constant = simulation.OracleConfig().gravitational_constant
+        mu = input_row[0] * input_row[1]
+        sigma = input_row[6]
         potentials = []
         for distance in branch_distances:
-            value = 0.0
-            for coefficient, term in zip(self.coefficients, self.terms):
-                value += coefficient * term.value(input_row, distance)
-            potentials.append(value)
+            x = distance / sigma
+            g_value = self.smearing.value(x)
+            potentials.append(-g_constant * mu * g_value / distance)
         return potentials
 
     def predict_branch_forces(self, input_row: list[float], branch_distances: list[float]) -> list[float]:
-        if not self.terms:
+        if self.smearing is None:
             return [0.0 for _ in branch_distances]
+        g_constant = simulation.OracleConfig().gravitational_constant
+        mu = input_row[0] * input_row[1]
+        sigma = input_row[6]
         forces = []
         for distance in branch_distances:
-            derivative = 0.0
-            for coefficient, term in zip(self.coefficients, self.terms):
-                derivative += coefficient * term.derivative(input_row, distance)
-            forces.append(abs(-derivative))
+            x = distance / sigma
+            g_value = self.smearing.value(x)
+            g_prime = self.smearing.derivative(x)
+            force = g_constant * mu * abs(g_prime / (sigma * distance) - g_value / (distance * distance))
+            forces.append(force)
         return forces
 
     def formula_text(self) -> str:
-        if not self.terms:
+        if self.smearing is None:
             return "V(r) = 0"
-        pieces = []
-        for coefficient, term in zip(self.coefficients, self.terms):
-            pieces.append(f"{coefficient:+.6e}*{term.name}")
-        return "V(r) = " + " ".join(pieces)
+        return f"V(r) = -G*mu*{self.smearing.expression}/r"
 
 
 @dataclass(frozen=True)
@@ -133,18 +107,89 @@ class ExperimentResult:
     duration_seconds: float
 
 
-BASIS_LIBRARY = tuple(
-    FormulaTerm(name)
-    for name in ("mu/r", "mu/r_eff", "mu/r_eff^2", "mu/r_eff^3", "mu*M/r_eff^2", "mu*sigma^2/r_eff^3")
-)
+def _g_erf(x: float) -> float:
+    return math.erf(x / 2.0)
+
+
+def _gprime_erf(x: float) -> float:
+    return math.exp(-(x * x) / 4.0) / math.sqrt(math.pi)
+
+
+def _g_plummer(x: float) -> float:
+    return x / math.sqrt(1.0 + x * x)
+
+
+def _gprime_plummer(x: float) -> float:
+    return 1.0 / ((1.0 + x * x) ** 1.5)
+
+
+def _g_gaussian_switch(x: float) -> float:
+    return 1.0 - math.exp(-(x * x))
+
+
+def _gprime_gaussian_switch(x: float) -> float:
+    return 2.0 * x * math.exp(-(x * x))
+
+
+def _g_tanh(x: float) -> float:
+    return math.tanh(x)
+
+
+def _gprime_tanh(x: float) -> float:
+    value = math.tanh(x)
+    return 1.0 - value * value
+
+
+def _g_rational(x: float) -> float:
+    return (x * x) / (1.0 + x * x)
+
+
+def _gprime_rational(x: float) -> float:
+    denominator = 1.0 + x * x
+    return (2.0 * x) / (denominator * denominator)
+
+
+SMEARING_LIBRARY = {
+    "erf": SmearingFunction(
+        name="erf",
+        expression="erf((r/sigma)/2)",
+        evaluator=_g_erf,
+        derivative_evaluator=_gprime_erf,
+        complexity=1.0,
+    ),
+    "plummer": SmearingFunction(
+        name="plummer",
+        expression="(r/sigma)/sqrt(1 + (r/sigma)^2)",
+        evaluator=_g_plummer,
+        derivative_evaluator=_gprime_plummer,
+        complexity=0.95,
+    ),
+    "gaussian_switch": SmearingFunction(
+        name="gaussian_switch",
+        expression="1 - exp(-(r/sigma)^2)",
+        evaluator=_g_gaussian_switch,
+        derivative_evaluator=_gprime_gaussian_switch,
+        complexity=1.0,
+    ),
+    "tanh": SmearingFunction(
+        name="tanh",
+        expression="tanh(r/sigma)",
+        evaluator=_g_tanh,
+        derivative_evaluator=_gprime_tanh,
+        complexity=1.0,
+    ),
+    "rational": SmearingFunction(
+        name="rational",
+        expression="((r/sigma)^2 / (1 + (r/sigma)^2))",
+        evaluator=_g_rational,
+        derivative_evaluator=_gprime_rational,
+        complexity=0.9,
+    ),
+}
 
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
-
-
-def _candidate_effective_distance(distance: float, wavepacket_width: float) -> float:
-    return math.sqrt(distance * distance + wavepacket_width * wavepacket_width)
 
 
 def _normalized_mse(prediction: list[list[float]], target: list[list[float]]) -> float:
@@ -156,94 +201,8 @@ def _normalized_mse(prediction: list[list[float]], target: list[list[float]]) ->
             numerator += (pred_value - target_value) ** 2
             denominator += target_value ** 2
             count += 1
-    denominator = denominator / max(count, 1) + 1e-12
+    denominator = denominator / max(count, 1) + 1e-30
     return (numerator / max(count, 1)) / denominator
-
-
-def _design_matrix(dataset: dict[str, object], terms: tuple[FormulaTerm, ...]) -> list[list[float]]:
-    matrix = []
-    inputs = dataset["inputs"]
-    distances = dataset["branch_distances"]
-    for input_row, distance_row in zip(inputs, distances):
-        for distance in distance_row:
-            matrix.append([term.value(input_row, distance) for term in terms])
-    return matrix
-
-
-def _flatten_branch_targets(dataset: dict[str, object]) -> list[float]:
-    return [value for row in dataset["branch_potentials"] for value in row]
-
-
-def _rms(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-    return math.sqrt(sum(value * value for value in values) / len(values))
-
-
-def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
-    size = len(vector)
-    augmented = [row[:] + [value] for row, value in zip(matrix, vector)]
-
-    for pivot in range(size):
-        max_row = max(range(pivot, size), key=lambda row: abs(augmented[row][pivot]))
-        augmented[pivot], augmented[max_row] = augmented[max_row], augmented[pivot]
-
-        pivot_value = augmented[pivot][pivot]
-        if abs(pivot_value) < 1e-12:
-            raise ValueError("Singular matrix encountered while fitting formula coefficients.")
-
-        scale = 1.0 / pivot_value
-        for column in range(pivot, size + 1):
-            augmented[pivot][column] *= scale
-
-        for row in range(size):
-            if row == pivot:
-                continue
-            factor = augmented[row][pivot]
-            for column in range(pivot, size + 1):
-                augmented[row][column] -= factor * augmented[pivot][column]
-
-    return [augmented[row][-1] for row in range(size)]
-
-
-def fit_formula(
-    train_dataset: dict[str, object],
-    terms: tuple[FormulaTerm, ...],
-    ridge: float,
-) -> CandidateFormula:
-    if not terms:
-        return CandidateFormula(terms=(), coefficients=())
-
-    design = _design_matrix(train_dataset, terms)
-    target = _flatten_branch_targets(train_dataset)
-    size = len(terms)
-    column_scales = []
-    for column in range(size):
-        column_scales.append(max(_rms([row[column] for row in design]), 1e-30))
-    target_scale = max(_rms(target), 1e-30)
-
-    scaled_design = []
-    for row in design:
-        scaled_design.append([value / scale for value, scale in zip(row, column_scales)])
-    scaled_target = [value / target_scale for value in target]
-
-    gram = [[0.0 for _ in range(size)] for _ in range(size)]
-    rhs = [0.0 for _ in range(size)]
-    for row, y_value in zip(scaled_design, scaled_target):
-        for i in range(size):
-            rhs[i] += row[i] * y_value
-            for j in range(size):
-                gram[i][j] += row[i] * row[j]
-
-    for i in range(size):
-        gram[i][i] += ridge
-
-    scaled_coefficients = _solve_linear_system(gram, rhs)
-    coefficients = tuple(
-        target_scale * coefficient / scale
-        for coefficient, scale in zip(scaled_coefficients, column_scales)
-    )
-    return CandidateFormula(terms=terms, coefficients=coefficients)
 
 
 def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> PredictionBundle:
@@ -270,35 +229,32 @@ def predict_dataset(formula: CandidateFormula, dataset: dict[str, object]) -> Pr
         )
         quantum_targets.append(list(quantum.recombined_probabilities) + [quantum.concurrence, quantum.visibility])
 
-    return PredictionBundle(
-        gravity_targets=gravity_targets,
-        quantum_targets=quantum_targets,
-    )
+    return PredictionBundle(gravity_targets=gravity_targets, quantum_targets=quantum_targets)
 
 
 def limit_penalty(formula: CandidateFormula) -> float:
-    if not formula.terms:
+    if formula.smearing is None:
         return 1.0
 
-    config = simulation.OracleConfig()
-    prediction = []
-    target = []
-    for m1, m2, distance, sigma in (
-        (1.2e-14, 1.0e-14, 1.5e-3, 6.0e-6),
-        (2.0e-14, 1.4e-14, 2.4e-3, 8.0e-6),
-        (3.0e-14, 2.4e-14, 3.6e-3, 1.2e-5),
-    ):
-        pred_row = []
-        target_row = []
-        for offset in (0.0, 4.0e-4, 8.0e-4):
-            mu = m1 * m2
-            shifted_distance = distance + offset
-            input_row = [m1, m2, shifted_distance, 4.0e-5, 4.0e-5, 1.0, sigma, 1.5e-4]
-            pred_row.append(formula.predict_branch_potentials(input_row, [shifted_distance])[0])
-            target_row.append(-config.gravitational_constant * mu / shifted_distance)
-        prediction.append(pred_row)
-        target.append(target_row)
-    return _normalized_mse(prediction, target)
+    x_small = (0.0, 0.25, 0.5)
+    x_large = (6.0, 10.0, 20.0)
+    x_grid = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+    small_penalty = _mean([formula.smearing.value(x) ** 2 for x in x_small])
+    large_penalty = _mean([(1.0 - formula.smearing.value(x)) ** 2 for x in x_large])
+
+    monotonic_penalty = 0.0
+    previous = formula.smearing.value(x_grid[0])
+    for x in x_grid[1:]:
+        current = formula.smearing.value(x)
+        monotonic_penalty += max(0.0, previous - current) ** 2
+        previous = current
+    monotonic_penalty /= max(len(x_grid) - 1, 1)
+
+    range_penalty = _mean(
+        [max(0.0, -formula.smearing.value(x)) ** 2 + max(0.0, formula.smearing.value(x) - 1.0) ** 2 for x in x_grid]
+    )
+    return small_penalty + large_penalty + monotonic_penalty + range_penalty
 
 
 def score_formula(
@@ -310,7 +266,7 @@ def score_formula(
     gravity_error = _normalized_mse(prediction.gravity_targets, dataset["gravity_targets"])
     quantum_error = _normalized_mse(prediction.quantum_targets, dataset["quantum_targets"])
     asymptotic_penalty = limit_penalty(formula)
-    complexity = float(len(formula.terms))
+    complexity = 0.0 if formula.smearing is None else formula.smearing.complexity
     unified_score = (
         config.gravity_weight * gravity_error
         + config.quantum_weight * quantum_error
@@ -339,17 +295,19 @@ def search_best_formula(
     val_datasets: Sequence[dict[str, object]],
     config: SearchConfig,
 ) -> tuple[CandidateFormula, tuple[float, float, float, float, float]]:
-    best_formula = CandidateFormula(terms=(), coefficients=())
+    del train_dataset
+    best_formula = CandidateFormula(smearing=None)
     best_metrics = score_formula_across_datasets(best_formula, val_datasets, config)
 
-    max_terms = min(config.max_terms, len(BASIS_LIBRARY))
-    for num_terms in range(1, max_terms + 1):
-        for subset in itertools.combinations(BASIS_LIBRARY, num_terms):
-            formula = fit_formula(train_dataset, subset, ridge=config.ridge)
-            metrics = score_formula_across_datasets(formula, val_datasets, config)
-            if metrics[0] < best_metrics[0]:
-                best_formula = formula
-                best_metrics = metrics
+    for smearing in SMEARING_LIBRARY.values():
+        formula = CandidateFormula(smearing=smearing)
+        metrics = score_formula_across_datasets(formula, val_datasets, config)
+        if metrics[0] < best_metrics[0] - 1e-15:
+            best_formula = formula
+            best_metrics = metrics
+        elif abs(metrics[0] - best_metrics[0]) <= 1e-15 and metrics[4] < best_metrics[4]:
+            best_formula = formula
+            best_metrics = metrics
 
     return best_formula, best_metrics
 
@@ -360,10 +318,10 @@ def _is_better_candidate(
     best_formula: CandidateFormula,
     best_metrics: tuple[float, float, float, float, float],
 ) -> bool:
-    score_epsilon = 1e-12
+    score_epsilon = 1e-15
     if metrics[0] < best_metrics[0] - score_epsilon:
         return True
-    if abs(metrics[0] - best_metrics[0]) <= score_epsilon and len(formula.terms) < len(best_formula.terms):
+    if abs(metrics[0] - best_metrics[0]) <= score_epsilon and metrics[4] < best_metrics[4]:
         return True
     return False
 
@@ -375,18 +333,16 @@ def _svg_scatter_points(values: list[tuple[float, float]], x0: int, y0: int, wid
     xmax = max(xs)
     ymin = min(ys)
     ymax = max(ys)
-    if abs(xmax - xmin) < 1e-12:
+    if abs(xmax - xmin) < 1e-18:
         xmax = xmin + 1.0
-    if abs(ymax - ymin) < 1e-12:
+    if abs(ymax - ymin) < 1e-18:
         ymax = ymin + 1.0
 
     circles = []
     for x_value, y_value in values:
         px = x0 + 20 + (x_value - xmin) / (xmax - xmin) * (width - 40)
         py = y0 + height - 20 - (y_value - ymin) / (ymax - ymin) * (height - 40)
-        circles.append(
-            f'<circle cx="{px:.2f}" cy="{py:.2f}" r="3" fill="{color}" opacity="0.8" />'
-        )
+        circles.append(f'<circle cx="{px:.2f}" cy="{py:.2f}" r="3" fill="{color}" opacity="0.8" />')
     diagonal = (
         f'<line x1="{x0 + 20}" y1="{y0 + height - 20}" '
         f'x2="{x0 + width - 20}" y2="{y0 + 20}" '
@@ -421,7 +377,7 @@ def save_diagnostic_plot(
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
 <rect width="100%" height="100%" fill="#fbf8ef" />
-<text x="30" y="35" font-family="Courier New" font-size="16" fill="#111111">Unified Formula Diagnostics</text>
+<text x="30" y="35" font-family="Courier New" font-size="16" fill="#111111">Unified Smearing Diagnostics</text>
 <text x="30" y="60" font-family="Courier New" font-size="12" fill="#333333">{formula_text}</text>
 <text x="30" y="78" font-family="Courier New" font-size="11" fill="#444444">{validation_summary}</text>
 <text x="80" y="95" font-family="Courier New" font-size="12" fill="#111111">Mean Potential: Oracle vs Predicted</text>
@@ -438,7 +394,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
     config = config or SearchConfig()
     t0 = time.time()
 
-    zero_formula = CandidateFormula(terms=(), coefficients=())
+    zero_formula = CandidateFormula(smearing=None)
     best_formula = zero_formula
     best_metrics = None
     best_val_datasets = None
@@ -446,11 +402,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
 
     while True:
         round_seed = config.seed + 1000 * search_rounds
-        train_dataset = simulation.make_dataset(
-            config.num_train,
-            seed=round_seed,
-            regime=config.train_regime,
-        )
+        train_dataset = simulation.make_dataset(config.num_train, seed=round_seed, regime=config.train_regime)
         val_datasets = [
             simulation.make_dataset(
                 config.num_val,
@@ -471,7 +423,10 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
             best_val_datasets = val_datasets
 
         search_rounds += 1
-        if search_rounds >= 1 and (time.time() - t0) >= config.time_budget_seconds:
+        elapsed = time.time() - t0
+        if best_metrics is not None and best_metrics[0] <= config.early_stop_score:
+            break
+        if search_rounds >= 1 and elapsed >= config.time_budget_seconds:
             break
 
     zero_formula_score = (
@@ -481,9 +436,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
     )
     reference_dataset = best_val_datasets[0]
     prediction = predict_dataset(best_formula, reference_dataset)
-    validation_summary = "heldout validation: " + ", ".join(
-        dataset["regime"] for dataset in best_val_datasets
-    )
+    validation_summary = "heldout validation: " + ", ".join(dataset["regime"] for dataset in best_val_datasets)
     plot_path = save_diagnostic_plot(
         reference_dataset,
         prediction,
@@ -503,7 +456,7 @@ def run_experiment(config: SearchConfig | None = None) -> ExperimentResult:
         zero_formula_score=zero_formula_score,
         formula_text=best_formula.formula_text(),
         plot_path=plot_path,
-        num_terms=len(best_formula.terms),
+        num_terms=0 if best_formula.smearing is None else 1,
         num_validation_regimes=len(best_val_datasets),
         validation_summary=validation_summary,
         search_rounds=search_rounds,
