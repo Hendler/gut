@@ -212,6 +212,24 @@ class CorrectionFormula:
         return values
 
 
+def canonicalize_correction_formula(
+    formula: CorrectionFormula,
+    coefficient_tolerance: float = 1e-12,
+) -> CorrectionFormula:
+    kept_terms = []
+    kept_coefficients = []
+    for term, coefficient in zip(formula.terms, formula.coefficients):
+        if abs(coefficient) > coefficient_tolerance:
+            kept_terms.append(term)
+            kept_coefficients.append(coefficient)
+    return CorrectionFormula(
+        terms=tuple(kept_terms),
+        coefficients=tuple(kept_coefficients),
+        physics_config=formula.physics_config,
+        complexity=1.0 + 0.2 * len(kept_terms),
+    )
+
+
 @dataclass(frozen=True)
 class CorrectionRecoveryResult:
     unified_score: float
@@ -225,6 +243,33 @@ class CorrectionRecoveryResult:
     validation_summary: str
     num_validation_regimes: int
     search_rounds: int
+    duration_seconds: float
+
+
+@dataclass(frozen=True)
+class CorrectionRankingEntry:
+    formula: CorrectionFormula
+    unified_score: float
+    gravity_error: float
+    quantum_error: float
+    limit_penalty: float
+    complexity_penalty: float
+    selected_term_names: tuple[str, ...]
+    coefficients: dict[str, float]
+
+    @property
+    def formula_text(self) -> str:
+        return self.formula.formula_text()
+
+
+@dataclass(frozen=True)
+class BlindDegeneracyReport:
+    top_rankings: tuple[CorrectionRankingEntry, ...]
+    runner_up_margin: float
+    total_subsets: int
+    zero_formula_score: float
+    plot_path: str
+    validation_summary: str
     duration_seconds: float
 
 
@@ -802,12 +847,13 @@ def fit_correction_formula(
         target_scale * coefficient / scale
         for coefficient, scale in zip(scaled_coefficients, column_scales)
     )
-    return CorrectionFormula(
+    formula = CorrectionFormula(
         terms=terms,
         coefficients=coefficients,
         physics_config=config.oracle_config,
         complexity=1.0 + 0.2 * len(terms),
     )
+    return canonicalize_correction_formula(formula)
 
 
 def fit_erf_scaled_family(train_dataset: dict[str, object], config: SearchConfig) -> CandidateFormula:
@@ -955,6 +1001,67 @@ def search_best_correction_formula(
     return best_formula, best_metrics
 
 
+def rank_correction_subsets(
+    train_dataset: dict[str, object],
+    val_datasets: Sequence[dict[str, object]],
+    config: SearchConfig,
+    correction_library: Sequence[CorrectionTerm] | None = None,
+    *,
+    max_subset_size: int | None = None,
+    top_n: int | None = None,
+    coefficient_key: str = "name",
+) -> list[CorrectionRankingEntry]:
+    correction_library = tuple(correction_library or CORRECTION_LIBRARY)
+    max_subset_size = min(max_subset_size or len(correction_library), len(correction_library))
+    best_by_signature: dict[tuple[tuple[str, ...], tuple[float, ...]], CorrectionRankingEntry] = {}
+
+    for subset_size in range(1, max_subset_size + 1):
+        for subset in itertools.combinations(correction_library, subset_size):
+            formula = fit_correction_formula(train_dataset, subset, config)
+            if not formula.terms:
+                continue
+            unified_score, gravity_error, quantum_error, asymptotic_penalty, complexity = (
+                score_correction_formula_across_datasets(formula, val_datasets, config)
+            )
+            entry = CorrectionRankingEntry(
+                formula=formula,
+                unified_score=unified_score,
+                gravity_error=gravity_error,
+                quantum_error=quantum_error,
+                limit_penalty=asymptotic_penalty,
+                complexity_penalty=complexity,
+                selected_term_names=tuple(term.name for term in formula.terms),
+                coefficients=formula.coefficient_map(correction_library, key=coefficient_key),
+            )
+            signature = (
+                entry.selected_term_names,
+                tuple(round(coefficient, 12) for coefficient in formula.coefficients),
+            )
+            previous = best_by_signature.get(signature)
+            if previous is None or (
+                entry.unified_score,
+                entry.complexity_penalty,
+                entry.selected_term_names,
+            ) < (
+                previous.unified_score,
+                previous.complexity_penalty,
+                previous.selected_term_names,
+            ):
+                best_by_signature[signature] = entry
+
+    rankings = list(best_by_signature.values())
+    rankings.sort(
+        key=lambda entry: (
+            entry.unified_score,
+            entry.complexity_penalty,
+            entry.selected_term_names,
+        )
+    )
+    if top_n is None:
+        return rankings
+    return rankings[:top_n]
+
+
 def _default_eft_config() -> SearchConfig:
     return SearchConfig(
         train_regime="eft_sensitive",
@@ -1081,6 +1188,76 @@ def run_blind_correction_recovery_experiment(
         correction_library,
         max_subset_size=max_subset_size,
         coefficient_key="expression",
+    )
+
+
+def run_blind_degeneracy_analysis(
+    config: SearchConfig | None = None,
+    *,
+    max_subset_size: int = 3,
+    max_coupling_order: int = 2,
+    max_sigma_power: int = 4,
+    top_n: int = 5,
+) -> BlindDegeneracyReport:
+    config = config or _default_eft_config()
+    correction_library = generate_blind_correction_library(
+        max_coupling_order=max_coupling_order,
+        max_sigma_power=max_sigma_power,
+    )
+    t0 = time.time()
+    train_dataset = simulation.make_dataset(
+        config.num_train,
+        seed=config.seed,
+        regime=config.train_regime,
+        config=config.oracle_config,
+    )
+    val_datasets = [
+        simulation.make_dataset(
+            config.num_val,
+            seed=config.seed + 1 + 97 * regime_index,
+            regime=regime,
+            config=config.oracle_config,
+        )
+        for regime_index, regime in enumerate(config.validation_regimes)
+    ]
+    rankings = rank_correction_subsets(
+        train_dataset,
+        val_datasets,
+        config,
+        correction_library=correction_library,
+        max_subset_size=max_subset_size,
+        top_n=top_n,
+        coefficient_key="expression",
+    )
+    top_formula = rankings[0].formula
+    prediction = predict_dataset(top_formula, val_datasets[0], config.oracle_config)
+    validation_summary = "heldout validation: " + ", ".join(dataset["regime"] for dataset in val_datasets)
+    plot_path = save_diagnostic_plot(
+        val_datasets[0],
+        prediction,
+        top_formula.formula_text(),
+        validation_summary,
+        config.output_dir,
+    )
+    zero_formula = CorrectionFormula(terms=(), coefficients=(), physics_config=config.oracle_config, complexity=1.0)
+    zero_formula_score = score_correction_formula_across_datasets(zero_formula, val_datasets, config)[0]
+    total_subsets = sum(
+        math.comb(len(correction_library), subset_size)
+        for subset_size in range(1, min(max_subset_size, len(correction_library)) + 1)
+    )
+    runner_up_margin = (
+        rankings[1].unified_score - rankings[0].unified_score
+        if len(rankings) >= 2
+        else float("inf")
+    )
+    return BlindDegeneracyReport(
+        top_rankings=tuple(rankings),
+        runner_up_margin=runner_up_margin,
+        total_subsets=total_subsets,
+        zero_formula_score=zero_formula_score,
+        plot_path=plot_path,
+        validation_summary=validation_summary,
+        duration_seconds=time.time() - t0,
     )
 
 
@@ -1269,9 +1446,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run unified gravity/quantum recovery experiments.")
     parser.add_argument(
         "--mode",
-        choices=("smearing", "eft", "blind"),
+        choices=("smearing", "eft", "blind", "degeneracy"),
         default="smearing",
-        help="Choose the original smearing search, the curated EFT recovery, or the blind dimensional EFT search.",
+        help="Choose the original smearing search, the curated EFT recovery, the blind dimensional search, or the blind degeneracy ranking.",
     )
     parser.add_argument(
         "--output-dir",
@@ -1302,10 +1479,16 @@ def main() -> None:
         default=4,
         help="Maximum sigma power for blind correction enumeration.",
     )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="How many ranked blind subsets to report in degeneracy mode.",
+    )
     args = parser.parse_args()
     base_config = SearchConfig(output_dir=args.output_dir, time_budget_seconds=args.time_budget_seconds)
 
-    if args.mode in {"eft", "blind"}:
+    if args.mode in {"eft", "blind", "degeneracy"}:
         eft_config = SearchConfig(
             output_dir=args.output_dir,
             time_budget_seconds=args.time_budget_seconds,
@@ -1313,6 +1496,28 @@ def main() -> None:
             validation_regimes=("eft_sensitive_compact", "eft_sensitive_wide"),
             oracle_config=AMPLIFIED_EFT_CONFIG,
         )
+        if args.mode == "degeneracy":
+            report = run_blind_degeneracy_analysis(
+                eft_config,
+                max_subset_size=args.max_subset_size,
+                max_coupling_order=args.max_coupling_order,
+                max_sigma_power=args.max_sigma_power,
+                top_n=args.top_n,
+            )
+            print("---")
+            print(f"total_subsets:    {report.total_subsets}")
+            print(f"runner_up_margin: {report.runner_up_margin:.6f}")
+            print(f"zero_formula:     {report.zero_formula_score:.6f}")
+            print(f"validation:       {report.validation_summary}")
+            print(f"seconds:          {report.duration_seconds:.2f}")
+            print(f"plot_path:        {report.plot_path}")
+            for rank, entry in enumerate(report.top_rankings, start=1):
+                print(
+                    f"rank_{rank}:         score={entry.unified_score:.6f} "
+                    f"terms={', '.join(entry.selected_term_names)}"
+                )
+                print(f"rank_{rank}_formula: {entry.formula_text}")
+            return
         if args.mode == "blind":
             result = run_blind_correction_recovery_experiment(
                 eft_config,

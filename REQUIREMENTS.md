@@ -306,26 +306,44 @@ Bulky plots should remain untracked unless there is a specific reason to preserv
 - Recovered coefficients: `pn_classical = 3.0`, `quantum_eft = 41/(10*pi)`, spurious = 0
 - CLI: `python3 train.py --mode eft`
 
-### Phase 3: Blind recovery (next)
+### Phase 3: Blind recovery (complete)
 
 Remove knowledge of which terms are in the oracle:
 
 1. Enumerate all dimensionless monomials in `{G, hbar, c, M, r, sigma}` up to second order in `G` and `hbar`
-2. Exhaustive subset search up to size 3-4 (~6000 subsets for ~20 terms)
-3. Fit coefficients via ridge regression, score on held-out EFT-sensitive regimes
-4. Check whether the search independently discovers `{GM/(rc^2), G*hbar/(r^2*c^3)}` with coefficients 3.0 and 1.305
+2. Exhaustive subset search up to size 3 across the blind library
+3. Fit coefficients via regression, score on held-out EFT-sensitive regimes
+4. Check whether the search independently discovers `{G*M/(r*c^2), G*hbar/(r^2*c^3)}` with coefficients 3.0 and 1.305
 
-A positive result: the Donoghue structure emerges from a blind dimensional-analysis search.
+Implemented result:
 
-CLI target: `python3 train.py --mode blind`
+- Blind library size: 29 terms
+- Exhaustive subsets up to size 3: 4089
+- Winning subset: `{G*M/(r*c^2), G*hbar/(r^2*c^3)}`
+- Recovered coefficients: `3.0` and `41/(10*pi)`
 
-### Phase 4: Correction degeneracy analysis (after Phase 3)
+CLI: `python3 train.py --mode blind`
+
+### Phase 4: Correction degeneracy analysis (complete)
 
 Apply the same uniqueness methodology used for `g(r/sigma)` to the correction sector:
 
-- Does the winning subset win by a large margin, or do alternative subsets score comparably?
-- If degenerate: the oracle lacks resolving power and needs enrichment (shorter distances, more regimes, larger datasets)
-- If unique: the oracle selects the Donoghue structure, which is the strongest version of the result
+- Rank the full blind subset space instead of only keeping the winner
+- Canonicalize away exactly zero coefficients so padded supersets do not masquerade as distinct formulas
+- Measure the gap between rank 1 and rank 2
+
+Current result:
+
+- Rank 1: `{G*M/(r*c^2), G*hbar/(r^2*c^3)}` with score `0.000000`
+- Rank 2: `{G*M/(r*c^2), G*M*sigma^3/(r^4*c^2), G*hbar*sigma/(r^3*c^3)}` with score `0.000396`
+- Runner-up margin: `0.000396`
+
+Interpretation:
+
+- The oracle does uniquely select the Donoghue pair within the blind search space
+- The uniqueness margin is real but moderate, so richer regimes would still be valuable if we want a sharper separation
+
+CLI: `python3 train.py --mode degeneracy`
 
 ## Success Criteria
 

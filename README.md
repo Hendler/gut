@@ -183,24 +183,34 @@ Run it:
 python3 train.py --mode eft --time-budget-seconds 5 --output-dir /tmp/gut-eft
 ```
 
-## Next Experiment: Blind Recovery (Phase 3)
+## Phase 3: Blind Recovery
 
-Phase 2 was not blind — the correction basis was hand-picked with knowledge of the oracle. Phase 3 removes that knowledge.
+Phase 2 was not blind because the correction basis was hand-picked with knowledge of the oracle. Phase 3 removes that knowledge.
 
-The plan:
+Implemented result:
 
-1. Enumerate all dimensionless monomials `G^a * hbar^b * c^d * M^e * r^f * sigma^g` up to second order in the coupling (|a|+|b| <= 2). This yields ~15-30 candidate terms.
-2. Search all subsets up to size 3-4 via exhaustive combinatorial enumeration. With 20 terms and max size 4: 6195 subsets.
-3. Fit coefficients via ridge regression, score on held-out regimes.
-4. Check whether the winning subset is `{GM/(rc^2), G*hbar/(r^2*c^3)}` with coefficients 3.0 and 1.305.
+1. Enumerate all dimensionless monomials `G^a * hbar^b * c^d * M^e * r^f * sigma^g` up to second order in the coupling.
+2. Build a blind library of 29 candidate terms.
+3. Search all subsets up to size 3, which yields 4089 subsets.
+4. Recover the winning subset `{G*M/(r*c^2), G*hbar/(r^2*c^3)}` with coefficients `3.0` and `1.305`.
 
-This is where compute goes. The search is combinatorially expensive but embarrassingly parallelizable.
+Run it:
 
-A positive result: the search independently discovers the Donoghue correction structure without being told what to look for.
+```bash
+python3 train.py --mode blind --time-budget-seconds 5 --output-dir /tmp/gut-blind
+```
 
 ## Phase 4: Degeneracy Analysis
 
-After Phase 3 identifies the winning subset, test whether alternative subsets of the same size achieve comparable scores. If the margin is large (like erf vs rational in the smearing sweep), the oracle uniquely selects the Donoghue structure. If small, the oracle lacks resolving power and needs enrichment.
+After Phase 3 identifies the winning subset, rank the full blind subset space and measure the gap to the runner-up.
+
+Current result on the amplified oracle:
+
+- Rank 1: `{G*M/(r*c^2), G*hbar/(r^2*c^3)}` with score `0.000000`
+- Rank 2: `{G*M/(r*c^2), G*M*sigma^3/(r^4*c^2), G*hbar*sigma/(r^3*c^3)}` with score `0.000396`
+- Runner-up margin: `0.000396`
+
+This means the oracle does select the Donoghue pair uniquely after canonicalizing away dead zero-coefficient terms, but the margin is moderate rather than enormous.
 
 ## How To Use Locally
 
@@ -228,7 +238,19 @@ python3 train.py --mode smearing --time-budget-seconds 5 --output-dir /tmp/gut
 python3 train.py --mode eft --time-budget-seconds 5 --output-dir /tmp/gut-eft
 ```
 
-Both modes print metrics and write a diagnostic SVG to the output directory.
+### Run the blind Donoghue recovery
+
+```bash
+python3 train.py --mode blind --time-budget-seconds 5 --output-dir /tmp/gut-blind
+```
+
+### Run the blind degeneracy ranking
+
+```bash
+python3 train.py --mode degeneracy --time-budget-seconds 5 --output-dir /tmp/gut-degeneracy
+```
+
+All modes print metrics and write a diagnostic SVG to the output directory.
 
 ## How To Use With An LLM In The Loop
 

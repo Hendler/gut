@@ -16,7 +16,7 @@ class TrainExperimentTests(unittest.TestCase):
         self.assertIn("sigma/r", expressions)
         self.assertGreaterEqual(len(library), 20)
 
-    def test_blind_recovery_finds_donoghue_subset_in_amplified_config(self):
+    def test_blind_degeneracy_ranks_donoghue_pair_first_with_margin(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = train.SearchConfig(
                 num_train=160,
@@ -28,14 +28,19 @@ class TrainExperimentTests(unittest.TestCase):
                 oracle_config=train.AMPLIFIED_EFT_CONFIG,
                 output_dir=tmpdir,
             )
-            result = train.run_blind_correction_recovery_experiment(config, max_subset_size=3)
+            report = train.run_blind_degeneracy_analysis(config, max_subset_size=3, top_n=5)
+            best = report.top_rankings[0]
 
-            self.assertLess(result.unified_score, 1e-3)
-            self.assertIn("G*M/(r*c^2)", result.formula_text)
-            self.assertIn("G*hbar/(r^2*c^3)", result.formula_text)
-            self.assertAlmostEqual(result.coefficients["G*M/(r*c^2)"], 3.0, delta=0.15)
-            self.assertAlmostEqual(result.coefficients["G*hbar/(r^2*c^3)"], 41.0 / (10.0 * pi), delta=0.15)
-            self.assertLess(abs(result.coefficients.get("sigma/r", 0.0)), 0.1)
+            self.assertEqual(report.total_subsets, 4089)
+            self.assertLess(best.unified_score, 1e-3)
+            self.assertIn("G*M/(r*c^2)", best.formula_text)
+            self.assertIn("G*hbar/(r^2*c^3)", best.formula_text)
+            self.assertAlmostEqual(best.coefficients["G*M/(r*c^2)"], 3.0, delta=0.15)
+            self.assertAlmostEqual(best.coefficients["G*hbar/(r^2*c^3)"], 41.0 / (10.0 * pi), delta=0.15)
+            self.assertLess(abs(best.coefficients.get("sigma/r", 0.0)), 0.1)
+            self.assertGreater(report.runner_up_margin, 2e-4)
+            self.assertNotEqual(report.top_rankings[1].selected_term_names, best.selected_term_names)
+            self.assertEqual(len(report.top_rankings), 5)
 
     def test_correction_recovery_recovers_known_eft_coefficients_in_amplified_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
