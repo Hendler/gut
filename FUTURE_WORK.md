@@ -123,23 +123,106 @@ Vary the oracle regimes (masses, distances, interaction times) and measure which
 
 A negative result is still informative: it tells you what this class of experiments cannot do.
 
-## Relationship Between the Two Directions
+## Direction C: Real Data Nobody Fully Understands
+
+The methodology is proven on simulated oracles. The next leap is to point it at real measurements where the standard prediction fails and the correct V(r) correction is unknown.
+
+### C1. Galaxy Rotation Curves (SPARC)
+
+The strongest candidate. 175 galaxies with measured rotation velocities, baryonic mass models, and clear residuals after subtracting the Newtonian prediction. The discrepancy is real and unresolved — it's either dark matter, modified gravity (MOND), or something else.
+
+The search question maps directly onto Phase 1: what is the simplest `g(r/r_scale)` such that `V(r) = -GM/r * g(r/r_scale)` matches the observed velocities? The smearing-function methodology applies with minimal adaptation: replace the two-body oracle with a galactic rotation curve predictor, replace branch structure with a radial profile.
+
+Multiple competing theories exist (NFW dark matter profiles, MOND, Verlinde emergent gravity), so the theory discrimination framework from Direction B also applies: which functional form does the blind search select?
+
+- Data: SPARC (Spitzer Photometry and Accurate Rotation Curves), 175 late-type galaxies
+- Format: radius, observed velocity, gas/disk/bulge contributions, uncertainties
+- Access: http://astroweb.cwru.edu/SPARC/
+- Key paper: Lelli, McGaugh, and Schombert, "SPARC: Mass Models for 175 Disk Galaxies," Astron. J. 152, 157 (2016)
+
+### C2. Short-Distance Gravity (Eot-Wash)
+
+Torsion pendulum experiments at the University of Washington testing the inverse-square law at sub-millimeter distances. This is the closest match to our oracle's physical setup: two masses at short distances, looking for deviations from 1/r^2. Published constraints bound the strength of Yukawa-type corrections.
+
+The search question: does a blind search over correction families find any structure in the residuals, or are they consistent with pure Newtonian gravity plus noise?
+
+- Data: published constraints and exclusion plots from the Eot-Wash group
+- Access: https://www.npl.washington.edu/eotwash/
+- Key paper: Lee, J. G. et al., "New Test of the Gravitational 1/r^2 Law at Separations down to 52 micrometers," Phys. Rev. Lett. 124, 101101 (2020)
+- Note: raw residuals may not be publicly available; constraints are published as exclusion bounds on Yukawa coupling strength vs range
+
+### C3. DESI Baryon Acoustic Oscillations
+
+The Dark Energy Spectroscopic Instrument published BAO measurements in 2024 suggesting possible dark energy evolution — the cosmological constant Lambda may not be constant. The standard LCDM model predicts w = -1 exactly; DESI data hints at w(z) varying with redshift.
+
+The search question: what is the simplest w(z) that fits the distance-redshift relation? This is a function-discovery problem analogous to the smearing function search but in cosmological context.
+
+- Data: DESI Year 1 BAO measurements (distance ratios at multiple redshifts)
+- Access: https://data.desi.lbl.gov/doc/releases/
+- Key paper: DESI Collaboration, "DESI 2024 VI: Cosmological Constraints from BAO Measurements," arXiv:2404.03002
+
+### C4. LIGO/Virgo Gravitational Wave Residuals
+
+Gravitational waveforms are public. GR templates are subtracted via matched filtering. If there are beyond-GR corrections to the merger/ringdown, they live in the residuals.
+
+The search question: does a blind search over post-GR correction terms find any structure in the post-subtraction residuals, or are they consistent with detector noise?
+
+- Data: Gravitational Wave Open Science Center (GWOSC)
+- Access: https://gwosc.org/
+- Key paper: Abbott, B. P. et al., "Open data from the third observing run of LIGO, Virgo, and KAGRA," Astrophys. J. Suppl. 267, 29 (2023)
+- Note: this requires significant signal processing adaptation; the current framework handles static potentials, not time-domain waveforms
+
+### C5. Precision Atomic Spectroscopy (Muonic Hydrogen)
+
+Precision energy level measurements in muonic hydrogen where QED + nuclear corrections should fully explain the data. The proton radius puzzle is mostly resolved but residual tensions remain at the ~1 sigma level. Any unexplained residual could contain new physics.
+
+- Data: published transition frequencies and extracted proton charge radii
+- Access: published in journal tables; see Antognini, A. et al. and Pohl, R. et al. publications
+- Key paper: Pohl, R. et al., "The size of the proton," Nature 466, 213 (2010)
+- Key paper: Antognini, A. et al., "Proton Structure from the Measurement of 2S-2P Transition Frequencies of Muonic Hydrogen," Science 339, 417 (2013)
+
+### Which to start with
+
+**SPARC is the best first target.** The data is public, tabular, clean, and the discrepancy is large and unresolved. The adaptation from our current framework is modest: replace the two-body potential with a galactic potential, search for corrections to V(r) that explain the flat rotation curves. If the blind search selects a MOND-like scaling over an NFW profile (or vice versa), that's a genuinely informative result on real data.
+
+Eot-Wash is the closest to our physical setup but the data access is harder (bounds rather than residuals). DESI and LIGO are important but require more significant framework adaptation. Muonic hydrogen is precision-limited — the residuals are tiny and may just be systematics.
+
+## Relationship Between the Three Directions
 
 Direction A stays within the Donoghue EFT and tests whether the methodology scales to harder recovery problems. It produces a methodological result: "automated search can (or cannot) recover N-loop quantum gravity corrections from simulated data."
 
 Direction B steps outside the EFT framework and tests whether different theoretical paradigms produce distinguishable experimental signatures. It produces a physics result: "these theories are (or are not) distinguishable in BMV-class experiments, and the optimal discriminating regime is X."
 
-Direction A is safer (known target coefficients to check against). Direction B is more interesting (answers an open question). Both are tractable with the existing infrastructure.
+Direction C points the methodology at real data where the answer is unknown. It produces a scientific result: "blind symbolic regression selects correction structure X from real measurements."
 
-The strongest combined result would be: recover the Donoghue two-loop corrections (Direction A), then show that the recovered EFT structure is distinguishable from semiclassical and decoherence alternatives (Direction B). That would demonstrate both the depth and breadth of the methodology.
+Direction A is safest (known target). Direction B is more interesting (open question, simulated). Direction C is the most interesting (open question, real data) but requires the most adaptation.
+
+The natural progression is A then B then C. But if the goal is impact rather than methodological completeness, skip to C with SPARC data — the methodology is already validated by Phases 1-4.
 
 ## References
+
+### Donoghue EFT Framework
 
 - Donoghue, J. F., "General relativity as an effective field theory: The leading quantum corrections," Phys. Rev. D 50, 3874 (1994)
 - Donoghue, J. F., "Introduction to the effective field theory description of gravity," in Advanced School on Effective Theories, Almunecar, Spain (1995). arXiv:gr-qc/9512024
 - Bjerrum-Bohr, N. E. J., Donoghue, J. F., and Holstein, B. R., "Quantum gravitational scattering at the Planckian energy scale," Phys. Rev. D 67, 084033 (2003)
+
+### Alternative Quantum Gravity Theories
+
 - Diosi, L., "A universal master equation for the gravitational violation of quantum mechanics," Phys. Lett. A 120, 377 (1987)
 - Penrose, R., "On gravity's role in quantum state reduction," Gen. Rel. Grav. 28, 581 (1996)
 - Bahrami, M. et al., "The Schrodinger-Newton equation and its foundations," New J. Phys. 16, 115007 (2014)
+
+### Gravity-Entanglement Experiments
+
 - Bose, S. et al., "Spin Entanglement Witness for Quantum Gravity," Phys. Rev. Lett. 119, 240401 (2017)
 - Aziz, J. and Howl, R., "Classical theories of gravity produce entanglement," Nature 646, 49 (2025)
+
+### Real Data Sources
+
+- Lelli, F., McGaugh, S. S., and Schombert, J. M., "SPARC: Mass Models for 175 Disk Galaxies with Spitzer Photometry and Accurate Rotation Curves," Astron. J. 152, 157 (2016). Data: http://astroweb.cwru.edu/SPARC/
+- Lee, J. G. et al., "New Test of the Gravitational 1/r^2 Law at Separations down to 52 Micrometers," Phys. Rev. Lett. 124, 101101 (2020). Group: https://www.npl.washington.edu/eotwash/
+- DESI Collaboration, "DESI 2024 VI: Cosmological Constraints from the Full-Shape Analysis of BAO Measurements," arXiv:2404.03002 (2024). Data: https://data.desi.lbl.gov/doc/releases/
+- Abbott, B. P. et al., "Open data from the third observing run of LIGO, Virgo, and KAGRA," Astrophys. J. Suppl. 267, 29 (2023). Data: https://gwosc.org/
+- Pohl, R. et al., "The size of the proton," Nature 466, 213 (2010)
+- Antognini, A. et al., "Proton Structure from the Measurement of 2S-2P Transition Frequencies of Muonic Hydrogen," Science 339, 417 (2013)
